@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "captured_at": "2026-04-25T06:00:33",
+    "takmicar": "Dragan Todorovic",
+    "port": "COM3",
+    "pdf_sha256": "002340411b4b7ce58e657e8d4deb98ae5d0ed8e3ae18096aafd30f29c63532f7",
+    "pdf_hmac_sha256": "25b549b2ae488b3b3663a4563608e81743789f177b9e998f38796e3592ed12ae",
+    "integrity": "Potpis HMAC pokriva data_hash + pdf_sha256; pdf_hmac_sha256 je HMAC celog PDF-a."
+  },
+  "race_data": {
+    "race_id": "TAURIS-20260425_060033",
+    "start_time": "2026-04-25T06:00:33",
+    "duration_sec": 0,
+    "raw_com_text": "---------------------------------------------------------------------------\r\n                    TauRIS  kontrol list   RS9.00/1            25.04.26-05:59:46\r\n     ---------------------------------------------------------------------------\r\n     \r\n     001.001.049.066  Dragan Todorovic      0040 0001-0040\r\n     \r\n     Lag        Prst           x Col. Kod \r\n     ---------------------------------------------------------------------------\r\n     0001 SRB    542356/2024  Z*      A431A0AB00            \r\n     0002 SRB    542360/2024  Z*      A42F203500            \r\n     0003 SRB    542361/2024  M*      A431CADE00            \r\n     0004 SRB    542368/2024  Z*      A431FA0B00            \r\n     0005 SRB    542369/2024  M*      A431E35D00            \r\n     0006 SRB    542375/2024  Z*      A42F462400            \r\n     0007 SRB    542380/2024  Z*      A4315E2700            \r\n     0008 SRB    542389/2024  M*      A431037B00            \r\n     0009 SRB    542393/2024  Z*      A431A92A00            \r\n     0010 SRB    542397/2024  Z*      A42F005300            \r\n     0011 SRB    542632/2024  M*      A431CA6500            \r\n     0012 SRB    619025/2025  M*      A4319EE900            \r\n     0013 SRB    619402/2025  M*      A42F222400            \r\n     0014 SRB    619406/2025  Z*      A42F457000            \r\n     0015 SRB    619407/2025  M*      A431A98400            \r\n     0016 SRB    619408/2025  Z*      A4310EE900            \r\n     0017 SRB    619409/2025  M*      A43104B600            \r\n     0018 SRB    619410/2025  M*      A42F65AD00            \r\n     0019 SRB    619412/2025  Z*      A42F629100            \r\n     0020 SRB    619413/2025  M*      A431DE3400            \r\n     0021 SRB    619414/2025  Z*      A431D5F100            \r\n     0022 SRB    619415/2025  M*      A4311B4600            \r\n     0023 SRB    619417/2025  M*      A4310EBC00            \r\n     0024 SRB    619420/2025  Z*      A42F85CB00            \r\n     0025 SRB    619421/2025  M*      A42F4BF200            \r\n     0026 SRB    619429/2025  M*      A431EF7F00            \r\n     0027 SRB    619432/2025  M*      A431FBFB00            \r\n     0028 SRB    619433/2025  M*      A42F3DF000            \r\n     0029 SRB    619444/2025  Z*      A42F483100            \r\n     0030 SRB    619445/2025  M*      A42F6AD500            \r\n     0031 SRB    619457/2025  Z*      A42F47E700            \r\n     0032 SRB    619473/2025  M*      A431C53D00            \r\n     0033 SRB    619474/2025  M*      A42F0F6300            \r\n     0034 SRB    619480/2025  M*      A42F5CA600            \r\n     0035 SRB    619563/2025  M*      A431D1B900            \r\n     0036 SRB    619953/2025  Z*      A43100D800            \r\n     0037 SRB    619954/2025  M*      A451919700            \r\n     0038 SRB    619963/2025  M*      A431FF2400            \r\n     0039 SRB    619968/2025  Z*      A431012200            \r\n     0040 SRB    619988/2025  M*      A431192A00            \r\n     ---------------------------------------------------------------------------\r\n     Br. kontrol: 1066-57232-F410-0000C280\r\n     Lager      : 0040 (13.04.26-09:44:44)\r\n     \r\n     \r\n                          (odgajiv)      (ulazn komisija)       (satna komisija)\r\n     ---------------------------------------------------------------------------",
+    "takmicar": "Dragan Todorovic",
+    "grupacija": "Grupacija 2",
+    "grupacija_broj": 2,
+    "broj_trke": "001",
+    "mesto_pustanja": "Markovac",
+    "start_grad": "Markovac"
+  },
+  "data_hash": "22cb1b2c18c05b64d76bfc275bd319db00b34441c20a0f3050a35f33180f6faf",
+  "signature_hmac_sha256": "f60b896e4e3de9ca2bfc9d0ae2d98a2dee99f0e30705011800cb3e7a40a4ffc9"
+}

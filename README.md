@@ -1,0 +1,184 @@
+# TAURIS -> PDF (Analiza leta)
+
+Mali Python program koji:
+
+1. poveze racunar sa TAURIS uredjajem (preko serijskog porta),
+2. preuzme podatke sa TAURIS uređaja preko COM-a (isto kao u programu **Analiza leta** — čitanje bajtova, bez komande `GET_RACE`),
+3. generise PDF dokument spreman za kasnije skeniranje/obradu u programu **Analiza leta**.
+
+## Sta je novo
+
+- padajuca lista COM portova + dugme `Osvezi`
+- prozor se otvara na sredini ekrana
+- dugme `Preuzmi podatke` radi u pozadini (GUI se ne zamrzava)
+- izbor **baud rate** (9600–115200, kao u Analiza leta)
+- posle uspeha: prozor **Pregled preuzimanja** (putanje, slanje, sadržaj)
+- validacija obaveznih polja trke (`race_id`, `start_time`, `duration_sec`); sirovi tekst sa COM-a ide u `raw_com_text` ako nije JSON
+- unapredjen PDF sablon (fiksna forma za skeniranje + QR kod)
+- auto ime izlaznih fajlova (datum/vreme + pilot + port)
+- logovanje u `logs/app.log`
+- `Test podaci` dugme (radi i bez uredjaja)
+- `build_exe.bat` za kreiranje `.exe`
+- zastita ocitanih podataka (hash + HMAC potpis + read-only JSON)
+- automatsko slanje rezultata na server ili email
+
+## Instalacija
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Pokretanje
+
+```bash
+python main.py
+```
+
+Program otvara mali prozor:
+
+1. poruka "Povezi se sa TAURIS satom",
+2. izaberete port iz padajuce liste i unesete ime pilota,
+3. kliknete `Povezi se`,
+4. nakon uspesnog povezivanja aktivira se dugme `Preuzmi podatke`,
+5. klikom na `Preuzmi podatke` program ~15 s čita COM; **na uređaju pokrenite slanje podataka** u tom intervalu (isto ponašanje kao dijalog „Preuzmi sa TauRis“ u Analiza leta).
+6. alternativno, klikom na `Test podaci` koristi se lokalni test JSON.
+
+Program ce napraviti:
+
+- `output/YYYYMMDD_HHMMSS_PILOT_PORT.json` - zasticeni rezultat (meta + race_data + hash + potpis)
+- `output/YYYYMMDD_HHMMSS_PILOT_PORT.pdf` - PDF izvestaj
+
+JSON fajl se cuva kao `read-only` i sadrzi digitalni potpis.
+Ako neko promeni sadrzaj, hash/potpis vise ne odgovaraju originalu.
+
+## Test rezim
+
+Test fajl je `test_data/sample_race.json`.
+
+Moze da se menja po potrebi, ali mora da sadrzi obavezna polja:
+
+- `race_id`
+- `start_time`
+- `duration_sec`
+
+## EXE build (Windows)
+
+Ako zelite samostalan `.exe`:
+
+```bash
+build_exe.bat
+```
+
+Nakon build-a, fajl ce biti u:
+
+- `dist/TaurisPdfApp.exe`
+
+## Logovi
+
+Program zapisuje sve greske i bitne dogadjaje u:
+
+- `logs/app.log`
+
+## Slanje rezultata (email/server)
+
+Podesava se preko environment varijabli.
+
+### 1) Iskljuceno slanje (default)
+
+```bash
+set TAURIS_DELIVERY_MODE=none
+```
+
+### 2) Slanje na server
+
+```bash
+set TAURIS_DELIVERY_MODE=server
+set TAURIS_SERVER_URL=https://vas-server/api/upload
+set TAURIS_SERVER_TOKEN=vas_token
+set TAURIS_SIGNING_KEY=promeni_ovu_tajnu
+```
+
+### 3) Slanje na email
+
+```bash
+set TAURIS_DELIVERY_MODE=email
+set TAURIS_SMTP_HOST=smtp.gmail.com
+set TAURIS_SMTP_PORT=587
+set TAURIS_SMTP_USER=vas_email@gmail.com
+set TAURIS_SMTP_PASSWORD=app_password
+set TAURIS_MAIL_FROM=vas_email@gmail.com
+set TAURIS_MAIL_TO=primaoc@domen.com
+set TAURIS_SIGNING_KEY=promeni_ovu_tajnu
+```
+
+Opciona varijabla:
+
+```bash
+set TAURIS_DELIVERY_TIMEOUT=15
+```
+
+## Primer server-side verifikacije
+
+Dodat je primer endpoint-a u `server_verify_example.py`.
+Endpoint prima `payload`, `json_file`, `pdf_file`, proverava hash + HMAC i tek onda cuva fajlove.
+
+Instalacija server zavisnosti:
+
+```bash
+pip install -r requirements-server.txt
+```
+
+Pokretanje servera:
+
+```bash
+set TAURIS_SIGNING_KEY=ista_tajna_kao_u_klijentu
+python server_verify_example.py
+```
+
+Default endpoint:
+
+- `http://localhost:8080/api/upload`
+
+U klijentu podesite:
+
+```bash
+set TAURIS_DELIVERY_MODE=server
+set TAURIS_SERVER_URL=http://localhost:8080/api/upload
+set TAURIS_SIGNING_KEY=ista_tajna_kao_u_klijentu
+```
+
+Ako je fajl menjan, server vraca gresku i odbija upload.
+
+## PHP endpoint za hosting (golubovipostari.com)
+
+Ako imate klasican hosting (cPanel/PHP), koristite fajl:
+
+- `api/upload.php`
+
+### Koraci
+
+1. Uploadujte `api/upload.php` na server (npr. `public_html/api/upload.php`).
+2. Na hostingu podesite env varijable:
+   - `TAURIS_SERVER_TOKEN`
+   - `TAURIS_SIGNING_KEY`
+3. Napravite folder sa dozvolom upisa za cuvanje fajlova:
+   - `server_uploads`
+4. U klijentu podesite:
+
+```bash
+set TAURIS_DELIVERY_MODE=server
+set TAURIS_SERVER_URL=https://www.golubovipostari.com/api/upload.php
+set TAURIS_SERVER_TOKEN=isti_token_kao_na_serveru
+set TAURIS_SIGNING_KEY=isti_signing_key_kao_na_serveru
+```
+
+Endpoint proverava token, hash i HMAC potpis.
+Ako je JSON menjan nakon ocitavanja, upload se odbija.
+
+## Vazno
+
+Ova verzija ocekuje da TAURIS vrati **validan JSON** i da na kraju prenosa posalje marker `END_RACE`.
+
+Ako protokol nije tekstualni JSON, javite tacan format odgovora sa uredjaja i prilagodicu parser.

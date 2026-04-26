@@ -1,0 +1,9 @@
+{
+  "race_id": "TRK-2026-001",
+  "pigeon_id": "SRB-12345",
+  "start_time": "2026-04-22T06:15:00",
+  "duration_sec": 14235,
+  "distance_km": 312.7,
+  "avg_speed_kmh": 79.1,
+  "weather": "sunce"
+}
