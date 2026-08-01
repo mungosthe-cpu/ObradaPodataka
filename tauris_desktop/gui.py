@@ -330,35 +330,55 @@ class TaurisApp:
         else:
             self.import_bricon_file_clicked()
 
+    # Uređaj-specifični ključevi za opis COM porta u Windows-u. Generični adapter
+    # ključevi (usb-serial, ch340, cp210, ftdi, prolific, silicon labs, cdc, uart...)
+    # se dele jer i TAURIS i BRICON često izlaze preko istih jeftinih USB-serial
+    # čipova — ali marketing/uredjaj-specifični nazivi NE smeju da se mešaju, inače
+    # se auto-izbor porta za TAURIS može zalepiti za priključen BRICON sat i obrnuto.
+    _GENERIC_USB_SERIAL_KEYS = (
+        "usb-serial",
+        "usb serial",
+        "ch340",
+        "cp210",
+        "ftdi",
+        "prolific",
+        "silicon labs",
+        "cdc",
+        "composite",
+        "uart",
+        "serial port",
+        "ch343",
+        "ch910",
+        "wch",
+    )
+    _TAURIS_ONLY_KEYS = ("tauris", "tau ris")
+    _BRICON_ONLY_KEYS = ("bricon", "x-treme", "xtreme", "speedy")
+
     def _tauris_like_com_ports(self, ports: list[str]) -> list[str]:
-        """Portovi čiji opis u Windowsu liči na TAURIS / BRICON / USB-serial adapter."""
+        """Portovi čiji opis liči na TAURIS / generički USB-serial (BEZ bricon-specifičnih naziva)."""
+        return self._filter_com_ports_by_keys(
+            ports, self._TAURIS_ONLY_KEYS + self._GENERIC_USB_SERIAL_KEYS, exclude=self._BRICON_ONLY_KEYS
+        )
+
+    def _bricon_like_com_ports(self, ports: list[str]) -> list[str]:
+        """Portovi čiji opis liči na BRICON / generički USB-serial (BEZ tauris naziva)."""
+        return self._filter_com_ports_by_keys(
+            ports, self._BRICON_ONLY_KEYS + self._GENERIC_USB_SERIAL_KEYS, exclude=self._TAURIS_ONLY_KEYS
+        )
+
+    def _device_like_com_ports(self, ports: list[str]) -> list[str]:
+        """Portovi koji liče na TRENUTNO IZABRANI tip uređaja (TAURIS ili BRICON)."""
+        if self._get_device_kind() == CLOCK_DEVICE_BRICON:
+            return self._bricon_like_com_ports(ports)
+        return self._tauris_like_com_ports(ports)
+
+    def _filter_com_ports_by_keys(
+        self, ports: list[str], keys: tuple[str, ...], *, exclude: tuple[str, ...] = ()
+    ) -> list[str]:
         if list_ports is None:
             return []
         want = {p.strip() for p in ports if p.strip()}
         hits: list[str] = []
-        keys = (
-            "tauris",
-            "tau ris",
-            "bricon",
-            "x-treme",
-            "xtreme",
-            "usb-serial",
-            "usb serial",
-            "ch340",
-            "cp210",
-            "ftdi",
-            "prolific",
-            "silicon labs",
-            "cdc",
-            "composite",
-            "uart",
-            "serial port",
-            "usb-serial",
-            "ch343",
-            "ch910",
-            "wch",
-            "speedy",
-        )
         for info in list_ports.comports():
             dev = (info.device or "").strip()
             if dev not in want:
@@ -372,6 +392,8 @@ class TaurisApp:
                     info.interface,
                 )
             ).lower()
+            if any(k in blob for k in exclude):
+                continue
             if any(k in blob for k in keys):
                 hits.append(dev)
         return hits
@@ -391,7 +413,7 @@ class TaurisApp:
             return reliable[0]
         if len(ports) == 1:
             return ports[0]
-        liked = self._tauris_like_com_ports(reliable)
+        liked = self._device_like_com_ports(reliable)
         if len(liked) == 1:
             return liked[0]
         if liked:
@@ -408,7 +430,7 @@ class TaurisApp:
         saved = (load_gui_settings_dict().get("port") or "").strip()
         if saved in ports:
             return True
-        return len(self._tauris_like_com_ports(ports)) == 1
+        return len(self._device_like_com_ports(ports)) == 1
 
     def _try_auto_prepare(self, *, reason: str = "startup") -> None:
         if serial is None or self.busy:
@@ -1609,7 +1631,7 @@ class TaurisApp:
     def _resolve_or_choose_upload_folder(self) -> Path | None:
         """Prvo automatski folder za izabranu grupaciju i broj trke na Desktopu; inače dijalog."""
         g, n, _m = self._capture_staza_from_ui()
-        b = f"{max(1, min(999, n)):03d}"
+        b = f"{max(1, min(MAX_BROJ_TRKE, n)):03d}"
         found = resolve_upload_folder_for_current_staza(g, b)
         if found is not None:
             logging.info("Automatski izabran folder za slanje: %s", found)
@@ -1646,7 +1668,7 @@ class TaurisApp:
             return
 
         g, n, _m = self._capture_staza_from_ui()
-        broj_trke = f"{max(1, min(999, n)):03d}"
+        broj_trke = f"{max(1, min(MAX_BROJ_TRKE, n)):03d}"
 
         self._set_busy(True)
         self.status_var.set(
@@ -1771,8 +1793,8 @@ class TaurisApp:
                 config,
                 device_kind,
                 on_com_bytes=on_bytes,
-                on_phase=on_phase if device_kind == CLOCK_DEVICE_BRICON else None,
-                should_cancel=should_cancel if device_kind == CLOCK_DEVICE_BRICON else None,
+                on_phase=on_phase,
+                should_cancel=should_cancel,
                 slow_uart=bool(self.slow_tauris_var.get()),
             )
             g, n, m = staza
@@ -1806,26 +1828,38 @@ class TaurisApp:
         except Exception as exc:
             from tauris_desktop.bricon import BriconCancelled
 
-            if isinstance(exc, BriconCancelled):
+            if isinstance(exc, (BriconCancelled, TaurisCancelled)):
                 logging.info("Preuzimanje otkazano od strane korisnika (port %s).", config.port)
                 self.worker_queue.put(("cancelled", str(exc)))
                 return
             logging.exception("Greska tokom live preuzimanja.")
-            if device_kind == CLOCK_DEVICE_BRICON and race_data is not None:
-                # Podaci su uspešno pročitani sa BRICON uređaja — greška je u koraku POSLE
-                # čitanja (PDF/zaključavanje/slanje). Read out na satu je često jednokratan,
-                # pa se već primljena lista ne sme izgubiti — snimi je pre prijave greške.
+            if race_data is not None:
+                # Podaci su uspešno pročitani sa uređaja — greška je u koraku POSLE čitanja
+                # (PDF/zaključavanje/slanje). Preuzimanje sa satova je često jednokratno
+                # (korisnik mora ponovo pokrenuti slanje), pa se već primljena lista ne sme
+                # izgubiti — snimi je za oporavak pre prijave greške.
                 try:
-                    from tauris_desktop.bricon_capture import save_race_data_recovery_snapshot
+                    if device_kind == CLOCK_DEVICE_BRICON:
+                        from tauris_desktop.bricon_capture import save_race_data_recovery_snapshot
 
-                    snap_path = save_race_data_recovery_snapshot(
-                        race_data, port=config.port, reason=f"{type(exc).__name__}: {exc}"
-                    )
+                        snap_path = save_race_data_recovery_snapshot(
+                            race_data, port=config.port, reason=f"{type(exc).__name__}: {exc}"
+                        )
+                        label = "BRICON"
+                    else:
+                        from tauris_desktop.tauris_capture import (
+                            save_tauris_race_data_recovery_snapshot,
+                        )
+
+                        snap_path = save_tauris_race_data_recovery_snapshot(
+                            race_data, port=config.port, reason=f"{type(exc).__name__}: {exc}"
+                        )
+                        label = "TAURIS"
                     exc = RuntimeError(
-                        f"{exc}\n\nBRICON podaci su uspešno pročitani i sačuvani radi oporavka:\n{snap_path}"
+                        f"{exc}\n\n{label} podaci su uspešno pročitani i sačuvani radi oporavka:\n{snap_path}"
                     )
                 except Exception:
-                    logging.exception("Snimanje BRICON race_data recovery snapshot-a nije uspelo.")
+                    logging.exception("Snimanje race_data recovery snapshot-a nije uspelo.")
             self.worker_queue.put(("error", exc))
 
     def _poll_worker_queue(self) -> None:

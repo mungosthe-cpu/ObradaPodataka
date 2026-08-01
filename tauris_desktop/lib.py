@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime
@@ -156,16 +157,40 @@ def read_serial_bytes_until_idle(
     return bytes(acc)
 
 
+def prepare_serial_port_for_passive_listen(ser: Any, *, device_label: str = "uređaj") -> None:
+    """
+    DTR/RTS za pasivno USB-CDC slušanje (program ne šalje nikakve komande, samo čeka da
+    uređaj počne slanje) — deljeno između TAURIS-a (nikad ne šalje komande) i BRICON-ovog
+    usb_passive režima, jer je ponašanje ovde stvarno identično po dizajnu.
+
+    RTS=False jer neki jeftini USB-CDC mostovi (isti čipovi kao na Arduino pločama) tumače
+    RTS tranziciju kao reset/boot signal i prekidaju vezu — zato se namerno NE diže RTS.
+
+    Ne menjaj ove vrednosti bez testa na stvarnom uređaju.
+    """
+    try:
+        ser.setDTR(True)
+        ser.setRTS(False)
+    except Exception as exc:
+        logging.debug(
+            "%s: DTR/RTS podešavanje nije uspelo: %s: %s", device_label, type(exc).__name__, exc
+        )
+    try:
+        ser.reset_input_buffer()
+    except Exception as exc:
+        logging.debug(
+            "%s: reset ulaznog bafera nije uspeo: %s: %s", device_label, type(exc).__name__, exc
+        )
+
+
 def prepare_serial_port_for_bricon(ser: Any, *, mode: str) -> None:
     """
     Postavlja DTR/RTS pre BRICON komunikacije. Jedino mesto koje to radi — bricon.py i
     bricon_pm.py su ranije imali dva gotovo identična, ali kontradiktorna helpera
     (različit RTS, različit reset bafera) bez objašnjenja koje je od njih namerno.
 
-    mode="usb_passive": pasivno USB-CDC slušanje (bez PM komandi, kao TAURIS slušanje).
-        RTS=False jer neki jeftini USB-CDC mostovi (isti čipovi kao na Arduino pločama)
-        tumače RTS tranziciju kao reset/boot signal i prekidaju vezu — zato se ovde
-        namerno NE diže RTS.
+    mode="usb_passive": pasivno USB-CDC slušanje (bez PM komandi, kao TAURIS slušanje) —
+        deli logiku sa prepare_serial_port_for_passive_listen (i TAURIS je koristi).
     mode="pm_protocol": aktivan Print Manager binarni protokol (SendVersionInfo,
         StartReadout, GetFancier — BriconLib.dll). RTS=True jer PM očekuje standardnu
         RTS linija za hardverski handshake pri slanju komandi; bez nje sat u nekim
@@ -173,15 +198,17 @@ def prepare_serial_port_for_bricon(ser: Any, *, mode: str) -> None:
 
     Ne menjaj ove vrednosti bez testa na stvarnom uređaju — obe su namerno različite.
     """
+    if mode == "usb_passive":
+        prepare_serial_port_for_passive_listen(ser, device_label="BRICON")
+        return
     try:
         ser.setDTR(True)
-        ser.setRTS(mode == "pm_protocol")
+        ser.setRTS(True)
     except Exception as exc:
         logging.debug("BRICON: DTR/RTS podešavanje nije uspelo (mode=%s): %s: %s", mode, type(exc).__name__, exc)
     try:
         ser.reset_input_buffer()
-        if mode == "pm_protocol":
-            ser.reset_output_buffer()
+        ser.reset_output_buffer()
     except Exception as exc:
         logging.debug("BRICON: reset bafera nije uspeo (mode=%s): %s: %s", mode, type(exc).__name__, exc)
 
@@ -1038,42 +1065,118 @@ def format_com_open_error(port: str, exc: BaseException) -> str:
     return f"Greška pri otvaranju porta {port}: {exc}"
 
 
+class TaurisCancelled(RuntimeError):
+    """Korisnik je otkazao TAURIS preuzimanje dok je bilo u toku."""
+
+
+def _is_transient_com_open_error(exc: BaseException) -> bool:
+    """
+    Windows ponekad kratko drži port „zauzetim" odmah posle priključenja USB-a ili posle
+    zatvaranja drugog programa — sledeći pokušaj otvaranja često prođe. Razlikuje se od
+    „port ne postoji"/„pogrešan port", gde ponavljanje ne pomaže i samo odlaže jasnu poruku.
+    """
+    if isinstance(exc, PermissionError):
+        return True
+    msg = str(exc).lower()
+    return "access is denied" in msg or "access denied" in msg or "permissionerror" in msg
+
+
 def read_race_from_device(
     config: TaurisConnectionConfig,
     *,
     on_com_bytes: Callable[[int], None] | None = None,
+    on_phase: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """
     Čitanje kao u programu Analiza leta (qt_app_ui_common._do_read):
     otvori COM, u petlji čitaj bajtove (ne šalje se GET_RACE); uređaj šalje podatke kada korisnik pokrene slanje.
+
+    TAURIS nema aktivni handshake — uređaj počinje da šalje tek kad korisnik pokrene slanje
+    na satu, zato faza koja bi kod BRICON-a bila „handshake" ovde znači „čekanje da uređaj
+    počne slanje". ``on_phase``/``should_cancel`` su opcioni (isti oblik kao BRICON put) da bi
+    GUI mogao da prikaže napredak i bezbedno otkaže preuzimanje dok je u toku.
     """
     if serial is None:
         raise RuntimeError("Nedostaje pyserial paket. Instalirajte: pip install pyserial")
 
-    verify_com_port_available(config.port)
+    def _check_cancel() -> None:
+        if should_cancel is not None and should_cancel():
+            raise TaurisCancelled("Otkazano od strane korisnika.")
 
+    def _phase(msg: str) -> None:
+        if on_phase is not None:
+            on_phase(msg)
+
+    t_start = time.monotonic()
+    _phase(f"traženje uređaja na portu {config.port}…")
+    verify_com_port_available(config.port)
+    _check_cancel()
+
+    _phase(f"povezivanje na {config.port} @ {config.baudrate} baud…")
     ser = None
-    try:
-        ser = serial.Serial(
-            port=config.port,
-            baudrate=config.baudrate,
-            bytesize=8,
-            parity="N",
-            stopbits=1,
-            timeout=config.read_timeout,
-        )
-    except Exception as exc:
+    last_open_exc: BaseException | None = None
+    attempts = max(1, int(TAURIS_OPEN_RETRY_ATTEMPTS))
+    for attempt in range(1, attempts + 1):
+        try:
+            ser = serial.Serial(
+                port=config.port,
+                baudrate=config.baudrate,
+                bytesize=8,
+                parity="N",
+                stopbits=1,
+                timeout=config.read_timeout,
+            )
+            last_open_exc = None
+            break
+        except Exception as exc:
+            last_open_exc = exc
+            if attempt >= attempts or not _is_transient_com_open_error(exc):
+                break
+            logging.warning(
+                "TAURIS diag | port=%s baud=%s phase=open_retry pokusaj=%s tip_greske=%s: %s",
+                config.port, config.baudrate, attempt, type(exc).__name__, exc,
+            )
+            _phase(f"port {config.port} privremeno nedostupan, ponovni pokušaj…")
+            _check_cancel()
+            time.sleep(TAURIS_OPEN_RETRY_DELAY_SEC)
+    if last_open_exc is not None:
         logging.exception("Greska pri otvaranju COM porta.")
-        raise RuntimeError(format_com_open_error(config.port, exc)) from exc
+        logging.info(
+            "TAURIS diag | port=%s baud=%s phase=open_failed trajanje=%.2fs tip_greske=%s",
+            config.port, config.baudrate, time.monotonic() - t_start, type(last_open_exc).__name__,
+        )
+        raise RuntimeError(format_com_open_error(config.port, last_open_exc)) from last_open_exc
+
+    prepare_serial_port_for_passive_listen(ser, device_label="TAURIS")
+    logging.info(
+        "TAURIS diag | port=%s baud=%s dtr=True rts=False phase=open_ok",
+        config.port, config.baudrate,
+    )
 
     def _notify(base: int) -> Callable[[int], None] | None:
         if on_com_bytes is None:
             return None
         return lambda n: on_com_bytes(base + n)
 
+    read_errors: list[BaseException] = []
+
+    def _on_read_error(exc: BaseException) -> None:
+        read_errors.append(exc)
+        _phase(f"veza prekinuta tokom čitanja ({type(exc).__name__}) — čuvam primljene podatke…")
+
+    raw = b""
     try:
-        raw = read_serial_bytes_until_idle(ser, config, on_com_bytes=_notify(0))
+        _check_cancel()
+        _phase("čekanje da TAURIS počne slanje podataka…")
+        raw = read_serial_bytes_until_idle(
+            ser, config, on_com_bytes=_notify(0), on_error=_on_read_error
+        )
+        _phase(f"preuzimanje u toku — primljeno {len(raw)} B…")
         for _ in range(4):
+            _check_cancel()
+            if read_errors:
+                break
             probe = decode_com_payload(raw)
             expected_last = parse_tauris_expected_last_lag(probe)
             if expected_last is None or tauris_text_has_lag_row(probe, expected_last):
@@ -1085,6 +1188,7 @@ def read_race_from_device(
                 max_iterations=config.tail_extra_max_iterations,
                 idle_empty_reads=config.tail_idle_empty_reads,
                 on_com_bytes=_notify(n_before),
+                on_error=_on_read_error,
             )
             raw = raw + more
             if len(raw) == n_before:
@@ -1092,6 +1196,9 @@ def read_race_from_device(
                     "TAURIS: u tekstu nema reda %04d SRB iako kontrol lista traži do tog broja; "
                     "nema novih bajtova — proverite kabl/baud ili ponovo pokrenite slanje.",
                     expected_last,
+                )
+                _save_tauris_incomplete_diagnostic(
+                    config.port, raw, reason=f"nedostaje red {expected_last:04d} SRB — nema novih bajtova"
                 )
                 break
             logging.info(
@@ -1106,14 +1213,67 @@ def read_race_from_device(
         except Exception:
             pass
 
+    duration = time.monotonic() - t_start
+
     if not raw.strip():
+        logging.info(
+            "TAURIS diag | port=%s baud=%s phase=empty trajanje=%.2fs primljeno=%sB parsiranje=n/a",
+            config.port, config.baudrate, duration, len(raw),
+        )
+        if read_errors:
+            _phase("veza prekinuta pre nego što je bilo šta primljeno.")
+            raise RuntimeError(
+                f"Veza sa TAURIS uređajem je prekinuta tokom čitanja "
+                f"({type(read_errors[0]).__name__}: {read_errors[0]}).\n\n"
+                "Proverite USB kabl/priključak i pokušajte ponovo."
+            ) from read_errors[0]
+        _phase("nema primljenih podataka.")
         raise RuntimeError(
             "Nema podataka sa TAURIS uređaja. Proverite: pravi COM port, baud rate "
             "(probajte 9600 ili kao u Analiza leta), da li je uređaj poslao podatke posle klika na preuzimanje."
         )
 
+    if read_errors:
+        logging.warning(
+            "TAURIS diag | port=%s baud=%s phase=read_error trajanje=%.2fs primljeno=%sB tip_greske=%s "
+            "— parcijalni podaci se ipak obrađuju.",
+            config.port, config.baudrate, duration, len(raw), type(read_errors[0]).__name__,
+        )
+
+    _phase("parsiranje primljenih podataka…")
     text = decode_com_payload(raw)
-    return parse_tauris_payload_to_race_dict(text)
+    try:
+        data = parse_tauris_payload_to_race_dict(text)
+    except Exception as exc:
+        logging.exception("TAURIS: parsiranje primljenih podataka nije uspelo.")
+        diag_path = _save_tauris_incomplete_diagnostic(
+            config.port, raw, reason=f"parsiranje nije uspelo: {type(exc).__name__}: {exc}"
+        )
+        logging.info(
+            "TAURIS diag | port=%s baud=%s phase=parse_failed trajanje=%.2fs primljeno=%sB diag=%s",
+            config.port, config.baudrate, duration, len(raw), diag_path,
+        )
+        raise
+
+    logging.info(
+        "TAURIS diag | port=%s baud=%s phase=done trajanje=%.2fs primljeno=%sB parsiranje=ok",
+        config.port, config.baudrate, duration, len(raw),
+    )
+    _phase("čuvanje rezultata…")
+    return data
+
+
+def _save_tauris_incomplete_diagnostic(port: str, raw: bytes, *, reason: str) -> Path | None:
+    """Snimi sirove bajtove za terensku dijagnostiku kad TAURIS prenos ne uspe do kraja."""
+    if not raw:
+        return None
+    try:
+        from tauris_desktop.tauris_capture import save_tauris_partial_payload_diagnostic
+
+        return save_tauris_partial_payload_diagnostic(port, bytes(raw), reason=reason)
+    except Exception:
+        logging.exception("Snimanje TAURIS dijagnostičkog fajla nije uspelo.")
+        return None
 
 
 def read_race_from_clock(
@@ -1127,9 +1287,8 @@ def read_race_from_clock(
 ) -> dict[str, Any]:
     """Čitanje sa TAURIS ili BRICON uređaja preko COM porta.
 
-    ``on_phase``/``should_cancel`` su trenutno iskorišćeni samo na BRICON putu (status
-    faze u GUI-ju + bezbedno otkazivanje); TAURIS čitanje ih ignoriše da bi ostalo
-    nepromenjeno.
+    ``on_phase``/``should_cancel`` rade na oba puta (status faze u GUI-ju + bezbedno
+    otkazivanje) — TAURIS put baca ``TaurisCancelled``, BRICON put ``BriconCancelled``.
     """
     kind = (device_type or CLOCK_DEVICE_TAURIS).strip().lower()
     if kind == CLOCK_DEVICE_BRICON:
@@ -1141,15 +1300,18 @@ def read_race_from_clock(
             on_phase=on_phase,
             should_cancel=should_cancel,
         )
-    return read_race_from_device(config, on_com_bytes=on_com_bytes)
+    return read_race_from_device(
+        config, on_com_bytes=on_com_bytes, on_phase=on_phase, should_cancel=should_cancel
+    )
 
 
 # Isto kao podrazumevano u GUI — ako je još uvek ovo, ime uzimamo iz preuzetih podataka
 UNKNOWN_PILOT_LABEL = "Nepoznat takmičar"
 
 GRUPACIJA_LABELS = tuple(f"Grupacija {i}" for i in range(1, 19))
-# Broj trke uvek tri cifre (001 … 999) — i u padajućem meniju i u izvozu
-BROJ_TRKE_LABELS = tuple(f"{i:03d}" for i in range(1, 1000))
+MAX_BROJ_TRKE = 20
+# Broj trke uvek tri cifre (001 … 020) — i u padajućem meniju i u izvozu
+BROJ_TRKE_LABELS = tuple(f"{i:03d}" for i in range(1, MAX_BROJ_TRKE + 1))
 
 
 def apply_staza_ui_to_race_data(
@@ -1175,7 +1337,7 @@ def apply_staza_ui_to_race_data(
         n = int(broj_trke_num)
     except (TypeError, ValueError):
         n = 1
-    n = max(1, min(999, n))
+    n = max(1, min(MAX_BROJ_TRKE, n))
     out["broj_trke"] = f"{n:03d}"
     mp = (mesto_pustanja or "").strip()
     out["mesto_pustanja"] = mp

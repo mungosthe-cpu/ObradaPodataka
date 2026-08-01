@@ -1,0 +1,55 @@
+TaurisPdfApp Lite **1.7.3** — TAURIS komunikacija ujednačena sa BRICON pouzdanošću
+
+## Zašto ova verzija
+BRICON čitanje je u 1.7.2 dobilo jasne faze, otkazivanje, dijagnostiku i zaštitu već
+pročitanih podataka — TAURIS put je ostao na starijem, tišem ponašanju: zatvaranje
+programa usred TAURIS preuzimanja nije stvarno prekidalo posao, prekid USB veze se nije
+video u interfejsu, a ako bi PDF/zaključavanje/slanje palo POSLE uspešnog čitanja sa sata,
+već pročitana lista se gubila. Ova verzija to ujednačava, bez izmene TAURIS protokola.
+
+## Novo u 1.7.3 — TAURIS popravke
+- **Otkazivanje sada stvarno radi** — zatvaranje prozora usred TAURIS preuzimanja
+  postavlja isti signal kao kod BRICON-a, i TAURIS čitanje ga sada proverava (pre
+  otvaranja porta, pre čitanja, između dodatnih krugova čitanja) i daje jasnu poruku
+  umesto da tiho nastavi u pozadini
+- **Status faza u interfejsu** — traženje uređaja, povezivanje, čekanje da TAURIS počne
+  slanje, preuzimanje (sa brojem primljenih bajtova), parsiranje, čuvanje — ranije je
+  TAURIS prikazivao samo broj bajtova, sada prikazuje i fazu kao BRICON
+- **Prekid USB veze usred prenosa više se ne guta tiho** — jasna poruka korisniku i log;
+  ako je nešto već primljeno pre prekida, ti podaci se ipak obrađuju umesto da se
+  odbace
+- **Prolazna greška pri otvaranju porta** (Windows kratko drži port zauzet odmah posle
+  priključenja USB-a) — jedan tihi ponovni pokušaj pre nego što se greška prijavi
+  korisniku
+- **TAURIS podaci preživljavaju kasniju grešku** — ako uspešno pročitana lista posle
+  toga ne uspe da se pretvori u PDF/zaključa/pošalje, pročitani podaci se snimaju za
+  oporavak u `logs/tauris_capture/` (isto kao BRICON), umesto da se tiho izgube
+- **Nepotpun paket ostavlja dijagnostički trag** — ako kontrol lista najavi poslednji
+  redni broj koji nikad ne stigne, primljeni bajtovi (hex + ASCII) se snimaju u
+  `logs/tauris_capture/` za terensku dijagnostiku
+- **DTR/RTS eksplicitno podešeni** — TAURIS je do sada oslanjao na podrazumevana
+  podešavanja pyserial-a; sada koristi istu, već proverenu pasivnu pripremu porta kao
+  BRICON-ov USB pasivni režim (RTS ostaje nizak da neki jeftini USB-CDC mostovi ne bi
+  protumačili promenu kao reset)
+- **TAURIS dijagnostički log** — svaki pokušaj upisuje port, baud, DTR/RTS stanje, fazu
+  protokola, broj primljenih bajtova, trajanje i tip greške (bez lozinki/kredencijala)
+- **19 novih automatizovanih testova** sa mock serijskim uređajem (`tests/test_tauris_serial_io.py`)
+  — uređaj pronađen/nije pronađen, pogrešan port, port zauzet, prvi pokušaj ne uspe pa
+  ponovni uspe, odgovor u više delova, nepotpun/nevažeći paket, prekid usred prenosa,
+  veliki broj rezultata, oštećena stavka između ispravnih, otkazivanje, oporavak posle
+  greške u kasnijem koraku — bez izmene postojećih BRICON testova (31/31 i dalje prolazi)
+
+## Sadržaj (kao 1.7.2)
+- BRICON baud fallback, Print Manager protokol, PDF font +20%, auto-nadogradnja sa
+  ugrađenim CA sertifikatima
+
+## Instalacija
+1. Preuzmite **TaurisPdfApp_Lite_Setup.exe** ispod.
+2. Pokrenite kao administrator (`/VERYSILENT` podržano).
+3. TAURIS: izaberite COM port i baud rate, «Preuzmi podatke», zatim pokrenite slanje na
+   satu.
+
+## Napomena
+Isti COM port ne može istovremeno koristiti dva programa. TAURIS protokol nije menjan —
+uređaj i dalje ne prima nikakvu komandu sa računara, samo šalje podatke kad korisnik
+pokrene slanje na satu.

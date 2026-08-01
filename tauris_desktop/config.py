@@ -16,7 +16,7 @@ LEGACY_PLAIN_TAURISLOCK_JSON_KEY = "taurislock_password"
 TXT_EXPORT_DIRNAME = "txt dokumenti"
 OPEN_PDF_FOLDER_NAME = "Open PDF"
 OPEN_TXT_FOLDER_NAME = "Open TXT"
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.7.3"
 MAIN_WINDOW_SKY_BG = "#f3f9ff"
 MAIN_WINDOW_BG_IMAGE_REL = "ICON/Pigeon in sky.png"
 # Dugme «Preuzmi» — plava paleta u tonu pozadine (#f3f9ff, #6ba3d6)
@@ -70,6 +70,10 @@ TAURIS_READ_MAX_ITERATIONS_SLOW = 320
 TAURIS_TAIL_IDLE_EMPTY_READS_SLOW = 90
 TAURIS_TAIL_EXTRA_MAX_ITER_SLOW = 220
 TAURIS_CONNECT_MAX_ITERATIONS_SLOW = 200
+# Otvaranje COM porta ponekad prolazno puca (Windows kratko drži port zauzet odmah posle
+# priključenja USB-a) — jedan tihi ponovni pokušaj pre nego što se prijavi greška korisniku.
+TAURIS_OPEN_RETRY_ATTEMPTS = 2
+TAURIS_OPEN_RETRY_DELAY_SEC = 0.35
 
 # BRICON (USB-CDC / virtuelni COM) — iste ideje kao TAURIS; često sporije slanje
 BRICON_READ_TIMEOUT_SEC = 0.15

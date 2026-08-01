@@ -85,7 +85,11 @@ Program zapisuje sve greske i bitne dogadjaje u:
 
 Podesava se preko environment varijabli.
 
-### 1) Iskljuceno slanje (default)
+Podrazumevano u programu: `TAURIS_DELIVERY_MODE=email` i primalac `analizaletagolubova@gmail.com` ako `TAURIS_MAIL_TO` nije postavljen. Za stvarno slanje preko Gmail-a i dalje treba SMTP (host, korisnik, app lozinka, From).
+
+HTTP upload podrazumevano ide na `https://www.golubovipostari.com/api/upload` ako `TAURIS_SERVER_URL` nije postavljen (mora postojati isti endpoint na serveru kao u `server_verify_example.py`).
+
+### 1) Iskljuceno slanje
 
 ```bash
 set TAURIS_DELIVERY_MODE=none
@@ -110,6 +114,21 @@ set TAURIS_SMTP_USER=vas_email@gmail.com
 set TAURIS_SMTP_PASSWORD=app_password
 set TAURIS_MAIL_FROM=vas_email@gmail.com
 set TAURIS_MAIL_TO=primaoc@domen.com
+set TAURIS_SIGNING_KEY=promeni_ovu_tajnu
+```
+
+### 4) Email + HTTP server (oba)
+
+```bash
+set TAURIS_DELIVERY_MODE=both
+set TAURIS_SERVER_URL=https://vas-server/api/upload
+set TAURIS_SERVER_TOKEN=opciono
+set TAURIS_SMTP_HOST=smtp.gmail.com
+set TAURIS_SMTP_PORT=587
+set TAURIS_SMTP_USER=vas_email@gmail.com
+set TAURIS_SMTP_PASSWORD=app_password
+set TAURIS_MAIL_FROM=vas_email@gmail.com
+set TAURIS_MAIL_TO=analizaletagolubova@gmail.com
 set TAURIS_SIGNING_KEY=promeni_ovu_tajnu
 ```
 
@@ -177,8 +196,21 @@ set TAURIS_SIGNING_KEY=isti_signing_key_kao_na_serveru
 Endpoint proverava token, hash i HMAC potpis.
 Ako je JSON menjan nakon ocitavanja, upload se odbija.
 
-## Vazno
+## Vazno — TAURIS protokol (stvarno ponasanje, ne pretpostavka)
 
-Ova verzija ocekuje da TAURIS vrati **validan JSON** i da na kraju prenosa posalje marker `END_RACE`.
+TAURIS nema aktivnu komandu koju program salje uredjaju (nema `GET_RACE`, nema handshake) —
+program samo otvori COM port i cita bajtove dok ih uredjaj salje; korisnik mora rucno pokrenuti
+slanje na samom satu. Kraj prenosa se prepoznaje po zatisju (N uzastopnih praznih citanja posto
+su bajtovi pocelu da stizu), ne po fiksnom marker-u — ako TAURIS-ova "kontrol lista" zaglavlje
+navodi ocekivani poslednji redni broj (Lag), program dodatno saceka dok se taj red
+(`NNNN SRB ...`) ne pojavi (do 4 dodatna kruga citanja) pre nego sto zakljuci da je prenos gotov.
 
-Ako protokol nije tekstualni JSON, javite tacan format odgovora sa uredjaja i prilagodicu parser.
+Primljeni tekst moze biti ili JSON (ako pocinje sa `{`) ili obican tekst — obican tekst se cuva
+u celini kao `raw_com_text` i tako se i stampa u PDF (isto kao izlaz iz programa Analiza leta);
+pojedinacni redovi (broj goluba, vreme dolaska) se ne rastavljaju u posebna polja osim imena
+takmicara. Kodiranje teksta se automatski pogadja (UTF-8 / CP1250 / CP1252 / Latin-1) jer TAURIS
+na srpskom Windows-u cesto salje CP1250.
+
+Ako se pojavi TAURIS uredjaj ciji odgovor ne odgovara ovom opisu (npr. stvarno salje JSON sa
+markerom na kraju), javite tacan format odgovora sa uredjaja i prilagodicu parser — ne
+izmisljamo protokol unapred.
