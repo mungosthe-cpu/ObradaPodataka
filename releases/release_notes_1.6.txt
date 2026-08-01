@@ -1,0 +1,19 @@
+TaurisPdfApp Lite **1.6** — Windows instalacioni paket
+
+## Novo u 1.6
+- **BRICON sat** — preuzimanje preko USB (Print Manager protokol), uvoz liste, «Snimi COM» dijagnostika
+- **BRICON USB drajveri** uključeni u instalaciju (automatski pri setup-u, Win 10/11 i Win 7)
+- **TAURIS** — poboljšano COM čitanje, .taurislock v2
+- **Slanje na obradu** — email bez ZIP (Lite, Gmail konfiguracija u paketu)
+- **Provera nadogradnje** — jasnije poruke kad nema interneta / DNS
+
+## Instalacija
+1. Preuzmite **TaurisPdfApp_Lite_Setup.exe** ispod.
+2. Pokrenite kao administrator (tiha instalacija podržana: `/VERYSILENT`).
+3. Pri prvom pokretanju: izaberite **BRICON** ili **TAURIS**, F5 za COM port.
+
+## Auto-nadogradnja
+Program (1.5 i starije) može automatski preuzeti ovu verziju preko menija **Baza → Provera Nadogradnje** (potreban internet).
+
+## Napomena
+Zatvorite **Print Manager** dok koristite BRICON USB u TaurisPdfApp-u — isti COM port ne može dva programa.

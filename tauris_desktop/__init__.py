@@ -1,0 +1,1 @@
+"""Tauris desktop application package."""

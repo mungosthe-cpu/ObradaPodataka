@@ -1,0 +1,13 @@
+api/upload_secrets.php
+tauris_club_email.json
+__pycache__/
+*.pyc
+
+# Privremeni marker samo za Lite PyInstaller build
+TAURIS_LITE
+
+# BRICON drajveri (preuzimaju se pri build_installer.ps1)
+third_party/bricon/drivers/CDM_Setup.exe
+third_party/bricon/drivers/USBDriver_win7.zip
+third_party/bricon/drivers/USBDriver_win7/
+third_party/bricon/pm_extract/

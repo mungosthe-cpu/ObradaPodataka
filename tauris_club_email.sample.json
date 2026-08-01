@@ -1,0 +1,8 @@
+{
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 587,
+  "smtp_user": "klupski.nalog@gmail.com",
+  "smtp_password": "app-password-od-16-karaktera",
+  "mail_from": "klupski.nalog@gmail.com",
+  "mail_to": "analizaletagolubova@gmail.com"
+}

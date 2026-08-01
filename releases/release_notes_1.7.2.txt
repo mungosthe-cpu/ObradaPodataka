@@ -1,0 +1,43 @@
+TaurisPdfApp Lite **1.7.2** — ispravka BRICON čitanja preko USB-a
+
+## Zašto ova verzija
+Sat BRICON nije mogao pouzdano da se očita preko USB-a: probni fallback na druge
+baud brzine je u praksi trošio skoro sav budžet vremena na PRVU probanu brzinu, pa
+se ostale (9600/19200/38400/57600/115200) praktično nikad nisu ni probale.
+
+## Novo u 1.7.2 — BRICON popravke
+- **Baud fallback popravljen** — svaka baud vrednost sada ima sopstveni vremenski
+  budžet; ako jedna ne uspe, program stvarno pređe na sledeću (ne samo teorijski)
+- **Jasne poruke i log po pokušaju** — koji COM port, koja baud vrednost, faza
+  protokola (povezivanje / handshake / čitanje), tip greške i broj primljenih bajtova
+- **Prekid konekcije više se ne guta tiho** — fizičko isključivanje sata daje jasnu
+  poruku i log umesto generičkog "nema podataka"; program ipak probuje ostale baud
+  vrednosti umesto da odustane
+- **Parcijalni podaci se čuvaju** — ako prenos ne uspe do kraja (nepotpun paket,
+  prekid, PM protokol bez kompletne liste), primljeni bajtovi se snimaju u
+  dijagnostički fajl (`logs/bricon_capture/`) umesto da se tiho izgube
+- **BRICON podaci preživljavaju kasniju grešku** — ako uspešno pročitana lista posle
+  toga ne uspe da se pretvori u PDF/pošalje (npr. problem sa diskom ili mrežom),
+  pročitani podaci se snimaju za oporavak, ne gube se
+- **DTR/RTS podešavanja razjašnjena** — jedna deljena funkcija umesto dva gotovo
+  identična, ali kontradiktorna dela koda (USB pasivni režim vs Print Manager
+  protokol imaju namerno različite vrednosti, sada dokumentovano zašto)
+- **Ubrzano čitanje velike liste** — uklonjeno nepotrebno ponovno parsiranje celog
+  primljenog bafera na svaki prazan ciklus čekanja (usporavalo je duže Read out
+  prenose)
+- **GUI status u toku preuzimanja** — traženje porta, povezivanje, koji baud se
+  proba, čitanje, završetak/greška; zatvaranje prozora tokom preuzimanja sada traži
+  potvrdu i bezbedno otkazuje posao umesto da ga naglo prekine
+
+## Sadržaj (kao 1.7.1)
+- BRICON Print Manager protokol (StartReadout), PDF font +20%, auto-nadogradnja sa
+  ugrađenim CA sertifikatima
+
+## Instalacija
+1. Preuzmite **TaurisPdfApp_Lite_Setup.exe** ispod.
+2. Pokrenite kao administrator (`/VERYSILENT` podržano).
+3. BRICON: zatvorite Print Manager, izaberite BRICON, F5, «Preuzmi BRICON», zatim
+   Read out na satu.
+
+## Napomena
+Isti COM port ne može istovremeno **Print Manager** i **TaurisPdfApp**.

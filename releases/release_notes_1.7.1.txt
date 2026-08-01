@@ -1,0 +1,13 @@
+TaurisPdfApp Lite **1.7.1** — ispravka auto-nadogradnje (HTTPS sertifikati)
+
+## Novo u 1.7.1
+- **GitHub nadogradnja** — ugrađeni CA sertifikati (`certifi`) za PyInstaller .exe; rešava grešku
+  `SSL: CERTIFICATE_VERIFY_FAILED` na nekim Windows računarima
+- Jasnija poruka ako SSL i dalje ne prolazi (ručno preuzimanje iz pregledača)
+- Prepoznavanje instalera `TaurisPdfApp_Lite_Setup.1.7.exe` na GitHub release-u
+
+## Sadržaj (kao 1.7)
+- BRICON StartReadout, PDF font +20%, BRICON/TAURIS, drajveri, Lite email
+
+## Instalacija
+Preuzmite **TaurisPdfApp_Lite_Setup.exe** (tačno to ime) sa GitHub Releases.

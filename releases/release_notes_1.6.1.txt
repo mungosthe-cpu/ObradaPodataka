@@ -1,0 +1,9 @@
+TaurisPdfApp Lite **1.6.1** — ispravka instalacije BRICON/FTDI drajvera
+
+## Ispravka
+- Uklonjen pogrešan `/S` pri instalaciji **CDM_Setup.exe** (FTDI) — više nema «Command line option syntax error»
+- FTDI drajver se instalira kroz zvanični prozor (Next/Finish) ako je uključena opcija u čarobnjaku
+- Verzija programa: 1.6.1
+
+## Sadržaj (kao 1.6)
+BRICON USB, drajveri u paketu, TAURIS, email slanje, COM dijagnostika.

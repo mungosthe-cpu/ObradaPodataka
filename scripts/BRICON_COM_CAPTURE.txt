@@ -1,0 +1,39 @@
+BRICON — snimanje COM saobracaja
+================================
+
+Zasto: da uporedimo nas program sa Print Managerom (bajt po bajt).
+
+VAZNO
+-----
+- Zatvorite Print Manager pre snimanja (isti COM port ne moze dva programa).
+- USB kabl, F5 u programu, izaberite port.
+- Tek POSLE starta snimanja: na satu Read out / Uitlezen (slave USB).
+
+U programu (BRICON)
+-------------------
+Dugme: «Snimi COM (dijagnostika)»
+Log: logs/bricon_capture/bricon_COMx_YYYYMMDD_HHMMSS.log
+  (pored projekta ili %LOCALAPPDATA%\TaurisPdfApp\logs\... za .exe)
+
+Iz komandne linije
+------------------
+  .venv\Scripts\python.exe scripts\bricon_com_capture.py COM3 --seconds 180 --analyze
+
+Analiza postojeceg snimka
+--------------------------
+  .venv\Scripts\python.exe scripts\analyze_bricon_capture.py logs\bricon_capture\bricon_COM3_....log
+
+Automatski snimak pri svakom «Preuzmi BRICON»
+---------------------------------------------
+Postavite promenljivu okruzenja pre pokretanja:
+  set TAURIS_BRICON_CAPTURE=1
+
+Uporedba sa Print Managerom
+---------------------------
+Windows ne dozvoljava dva programa na istom COM portu istovremeno.
+Za snimak dok PM radi potreban je com0com (virtuelni par portova) ili
+hardverski serial tap — za vecinu korisnika dovoljno je:
+  1) Snimak iz naseg programa (ovaj alat)
+  2) Ili «Uvezi BRICON fajl» iz PM kao referenca
+
+Posaljite .log fajl autoru programa ako USB i dalje ne radi.

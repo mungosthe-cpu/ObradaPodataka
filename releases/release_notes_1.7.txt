@@ -1,0 +1,21 @@
+TaurisPdfApp Lite **1.7** — Windows instalacioni paket
+
+## Novo u 1.7
+- **BRICON Print Manager protokol** — `StartReadoutCommand` (10-E1-00) iz BriconLib.dll; pouzdanije USB preuzimanje liste sa Speedy sata
+- **PDF izveštaj** — font u generisanom dokumentu uvećan za 20% (čitljivija lista)
+- **BRICON uputstva** — jasniji koraci (zatvoriti Print Manager, redosled Read out)
+- **TAURIS** — potvrđeno COM čitanje; poboljšani tekstovi grešaka
+
+## Sadržaj (kao 1.6.x)
+- BRICON USB drajveri u instalaciji (FTDI CDM + Win7)
+- TAURIS i BRICON u jednom programu; .taurislock v2
+- Lite: slanje na obradu emailom (Gmail u paketu)
+- Auto-nadogradnja preko GitHub Releases
+
+## Instalacija
+1. Preuzmite **TaurisPdfApp_Lite_Setup.exe** ispod.
+2. Pokrenite kao administrator (`/VERYSILENT` podržano).
+3. BRICON: zatvorite Print Manager, izaberite BRICON, F5, «Preuzmi BRICON», zatim Read out na satu.
+
+## Napomena
+Isti COM port ne može istovremeno **Print Manager** i **TaurisPdfApp**.
