@@ -1,12 +1,12 @@
 # Objavi GitHub Release sa instalacionim .exe (potreban GITHUB_TOKEN).
 # Primer:
 #   $env:GITHUB_TOKEN = "ghp_...."
-#   .\scripts\publish_github_release.ps1 -Tag 1.7.1
+#   .\scripts\publish_github_release.ps1 -Tag 2.0
 
 param(
     [Parameter(Mandatory = $false)]
-    [string]$Tag = "1.7.1",
-    [string]$ReleaseName = "Verzija 1.7.1",
+    [string]$Tag = "2.0",
+    [string]$ReleaseName = "Verzija 2.0",
     [string]$InstallerPath = "",
     [string]$AssetName = "TaurisPdfApp_Lite_Setup.exe",
     [string]$NotesFile = "",
@@ -21,7 +21,7 @@ if (-not $InstallerPath) {
     $InstallerPath = Join-Path $root "dist\TaurisPdfApp_Lite_Setup.exe"
 }
 if (-not $NotesFile) {
-    $NotesFile = Join-Path $root "releases\release_notes_1.7.1.txt"
+    $NotesFile = Join-Path $root "releases\release_notes_2.0.txt"
 }
 
 $token = $env:GITHUB_TOKEN

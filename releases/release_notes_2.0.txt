@@ -1,0 +1,28 @@
+TaurisPdfApp Lite **2.0** — pouzdano preuzimanje sa TAURIS i BRICON sata
+
+## Zašto ova verzija
+Ovo je prva 2.x linija: USB preuzimanje sa oba sata (TAURIS i BRICON) sada ima isti
+nivo pouzdanosti — jasne faze, otkazivanje, dijagnostiku i zaštitu već pročitanih
+podataka. Broj trke u programu je ograničen na 20 staza.
+
+## Novo u 2.0
+- **Broj trke 001–020** — padajući meni i izvoz više ne idu do 999; maksimum je 20 staza
+- **BRICON USB readout** — Print Manager handshake, zatim pasivno slušanje; svaka baud
+  vrednost ima sopstveni timeout umesto da prva potroši ceo budžet
+- **TAURIS čitanje ujednačeno sa BRICON-om** — faze u statusu, stvarno otkazivanje pri
+  zatvaranju prozora, jasna poruka pri prekidu USB veze, oporavak već pročitane liste
+- **Dijagnostika na terenu** — parcijalni i prekinuti prenosi se snimaju u
+  `logs/bricon_capture/` odnosno `logs/tauris_capture/` umesto da se tiho izgube
+- **Auto-nadogradnja** — Baza → Provera nadogradnje preuzima ovaj Lite instaler sa
+  GitHub Releases
+
+## Instalacija
+1. Preuzmite **TaurisPdfApp_Lite_Setup.exe** ispod.
+2. Pokrenite kao administrator (`/VERYSILENT` podržano).
+3. TAURIS: COM port i baud, «Preuzmi podatke», zatim slanje na satu.
+4. BRICON: zatvorite Print Manager, izaberite BRICON USB port (F5), «Preuzmi BRICON»,
+   zatim Read out na satu.
+
+## Napomena
+Isti COM port ne može istovremeno koristiti dva programa. TAURIS i dalje ne šalje
+komande satu — samo sluša kad korisnik pokrene slanje na uređaju.

@@ -16,7 +16,7 @@ LEGACY_PLAIN_TAURISLOCK_JSON_KEY = "taurislock_password"
 TXT_EXPORT_DIRNAME = "txt dokumenti"
 OPEN_PDF_FOLDER_NAME = "Open PDF"
 OPEN_TXT_FOLDER_NAME = "Open TXT"
-APP_VERSION = "1.7.3"
+APP_VERSION = "2.0"
 MAIN_WINDOW_SKY_BG = "#f3f9ff"
 MAIN_WINDOW_BG_IMAGE_REL = "ICON/Pigeon in sky.png"
 # Dugme «Preuzmi» — plava paleta u tonu pozadine (#f3f9ff, #6ba3d6)

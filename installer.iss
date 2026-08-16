@@ -11,7 +11,7 @@
 [Setup]
 AppId={{7C46AB8C-9C08-4B70-9202-52D4B275EA10}}
 AppName={#AppDisplayName}
-AppVersion=1.7.3
+AppVersion=2.0
 AppPublisher=Dragan Todorovic
 SetupIconFile=ICON\app.ico
 UninstallDisplayIcon={app}\TaurisPdfApp.exe
