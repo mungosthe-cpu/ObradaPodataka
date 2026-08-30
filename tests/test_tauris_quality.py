@@ -219,12 +219,35 @@ def test_pick_github_release_installer_asset() -> None:
 
 def test_format_github_update_error_ssl() -> None:
     import ssl
+    import urllib.error
 
     msg = tdl.format_github_update_error(
         ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
     )
     assert "HTTPS sertifikat" in msg
     assert "GitHub" in msg
+
+    # URLError sa string reason (često na Windows / urllib) ne sme da padne
+    wrapped = urllib.error.URLError(
+        "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+        "unable to get local issuer certificate (_ssl.c:1081)>"
+    )
+    msg2 = tdl.format_github_update_error(wrapped)
+    assert "HTTPS sertifikat" in msg2
+    assert "releases" in msg2.lower()
+
+
+def test_resolve_ca_bundle_path_finds_certifi() -> None:
+    path = tdl.resolve_ca_bundle_path()
+    assert path is not None
+    assert path.lower().endswith("cacert.pem")
+    assert Path(path).is_file()
+
+
+def test_https_ssl_context_loads() -> None:
+    ctx = tdl.https_ssl_context()
+    assert ctx is not None
+    assert ctx.verify_mode != 0
 
 
 @pytest.fixture

@@ -70,20 +70,67 @@ LOG_PATH: Path | None = None
 _https_ssl_context: ssl.SSLContext | None = None
 
 
+def resolve_ca_bundle_path() -> str | None:
+    """
+    Pronađi cacert.pem za HTTPS (GitHub nadogradnja / SMTP).
+
+    U PyInstaller onefile OpenSSL često NE koristi Windows store; mora da postoji
+    stvarni CA fajl na disku. ``certifi.where()`` ponekad vrati putanju koja još
+    nije izdvojena pored ``sys._MEIPASS``, pa proveravamo više kandidata.
+    """
+    candidates: list[Path] = []
+    try:
+        import certifi
+
+        where = certifi.where()
+        if where:
+            candidates.append(Path(where))
+        certifi_file = getattr(certifi, "__file__", None)
+        if certifi_file:
+            candidates.append(Path(certifi_file).resolve().parent / "cacert.pem")
+    except ImportError:
+        pass
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        root = Path(str(meipass))
+        candidates.append(root / "certifi" / "cacert.pem")
+        candidates.append(root / "cacert.pem")
+
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / "certifi" / "cacert.pem")
+        candidates.append(exe_dir / "cacert.pem")
+
+    seen: set[str] = set()
+    for cand in candidates:
+        try:
+            resolved = str(cand.resolve()) if cand.is_file() else ""
+        except OSError:
+            resolved = ""
+        if not resolved or resolved in seen:
+            continue
+        seen.add(resolved)
+        return resolved
+    return None
+
+
 def configure_https_certificates() -> None:
     """
     PyInstaller .exe na nekim Windows računarima nema CA bundle za urllib/ssl.
     certifi se pakuje u instalaciju; ovde ga povezujemo pre GitHub/SMTP HTTPS poziva.
     """
-    try:
-        import certifi
-
-        ca = certifi.where()
-        if ca and Path(ca).is_file():
-            os.environ.setdefault("SSL_CERT_FILE", ca)
-            os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
-    except ImportError:
-        pass
+    ca = resolve_ca_bundle_path()
+    if not ca:
+        logging.warning(
+            "HTTPS CA bundle nije pronađen (certifi/cacert.pem) — "
+            "provera nadogradnje može pasti na SSL."
+        )
+        return
+    # Prepiši pogrešan SSL_CERT_FILE iz okruženja (setdefault bi ga zadržao).
+    os.environ["SSL_CERT_FILE"] = ca
+    os.environ["REQUESTS_CA_BUNDLE"] = ca
+    logging.info("HTTPS CA bundle: %s", ca)
 
 
 def https_ssl_context() -> ssl.SSLContext:
@@ -91,15 +138,18 @@ def https_ssl_context() -> ssl.SSLContext:
     if _https_ssl_context is not None:
         return _https_ssl_context
     configure_https_certificates()
-    try:
-        import certifi
-
-        ca = certifi.where()
-        if ca and Path(ca).is_file():
+    ca = resolve_ca_bundle_path()
+    if ca:
+        # Windows store (ako ga OpenSSL vidi) + certifi kao pouzdan fallback.
+        try:
+            ctx = ssl.create_default_context()
+            ctx.load_verify_locations(cafile=ca)
+            _https_ssl_context = ctx
+            return _https_ssl_context
+        except ssl.SSLError:
+            logging.exception("SSL: kombinovani CA kontekst nije uspeo, probam samo certifi.")
             _https_ssl_context = ssl.create_default_context(cafile=ca)
             return _https_ssl_context
-    except ImportError:
-        pass
     _https_ssl_context = ssl.create_default_context()
     return _https_ssl_context
 
@@ -584,29 +634,42 @@ def pick_github_release_installer_asset(
     return None
 
 
-def _is_ssl_certificate_error(exc: BaseException) -> bool:
+def _message_looks_like_ssl_error(msg: str) -> bool:
+    low = (msg or "").lower()
+    return (
+        "certificate_verify_failed" in low
+        or "certificate verify failed" in low
+        or "unable to get local issuer certificate" in low
+        or "sslcertverificationerror" in low
+    )
+
+
+def _is_ssl_certificate_error(exc: BaseException | str) -> bool:
+    if isinstance(exc, str):
+        return _message_looks_like_ssl_error(exc)
+    if not isinstance(exc, BaseException):
+        return _message_looks_like_ssl_error(str(exc))
     for e in _walk_exception_graph(exc):
         if isinstance(e, ssl.SSLCertVerificationError):
             return True
-        msg = str(e)
-        if "CERTIFICATE_VERIFY_FAILED" in msg or "certificate verify failed" in msg.lower():
+        if _message_looks_like_ssl_error(str(e)):
             return True
     return False
 
 
-def format_github_update_error(exc: BaseException) -> str:
+def format_github_update_error(exc: BaseException | str) -> str:
     """Poruka za korisnika kada provera nadogradnje ne uspe."""
     if _is_ssl_certificate_error(exc):
         return (
             "Računar ne može da proveri HTTPS sertifikat za GitHub "
-            "(čest problem na starijim ili „čistim“ Windows instalacijama).\n\n"
+            "(čest problem kod .exe paketa bez CA fajla ili sa antivirus SSL pregledom).\n\n"
             "• Preuzmite nadogradnju ručno u pregledaču (Chrome/Edge):\n"
             f"  {GITHUB_RELEASES_URL}\n"
-            "• Instalirajte fajl TaurisPdfApp_Lite_Setup.exe sa release stranice\n"
-            "• Novije verzije programa imaju ugrađene sertifikate za auto-nadogradnju\n\n"
+            "• Instalirajte fajl TaurisPdfApp_Lite_Setup.exe sa poslednjeg release-a\n"
+            "• Od verzije 2.0.1 program traži ugrađeni cacert.pem i Windows store\n\n"
             "Ako koristite antivirus/proxy sa SSL pregledom, dodajte program u izuzetke."
         )
-    if _is_network_unreachable_error(exc):
+    if isinstance(exc, BaseException) and _is_network_unreachable_error(exc):
         return (
             "Nema internet veze ili računar ne može da pronađe GitHub (DNS).\n\n"
             "• Proverite Wi‑Fi ili mrežni kabl\n"
@@ -629,7 +692,7 @@ def format_github_update_error(exc: BaseException) -> str:
         return f"GitHub je vratio grešku HTTP {exc.code}.\n\n{exc}"
     if isinstance(exc, urllib.error.URLError):
         reason = exc.reason
-        if reason is not None and reason is not exc:
+        if isinstance(reason, (BaseException, str)) and reason is not exc:
             return format_github_update_error(reason)
         return (
             "Nije moguće pristupiti GitHub-u.\n\n"

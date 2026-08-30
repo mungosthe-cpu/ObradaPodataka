@@ -1,0 +1,22 @@
+TaurisPdfApp Lite **2.0.1** — ispravka auto-nadogradnje (SSL / GitHub)
+
+## Zašto ova verzija
+Na nekim Windows računarima «Provera Nadogradnje» padala je sa greškom
+`SSL: CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate`.
+Frozen `.exe` koristi ugrađeni OpenSSL koji ne vidi Windows CA store, a putanja
+do `certifi/cacert.pem` ponekad nije bila ispravno pronađena.
+
+## Novo u 2.0.1
+- Pouzdano traženje ugrađenog `cacert.pem` (uključujući PyInstaller `_MEIPASS`)
+- SSL kontekst: Windows store (ako postoji) + certifi CA bundle
+- Runtime hook pri startu `.exe` postavlja `SSL_CERT_FILE` pre HTTPS poziva
+- Jasnija poruka i bezbedan prikaz greške kad `urllib` vrati SSL kao string
+
+## Instalacija (važno ako ste na 2.0 i auto-update ne radi)
+1. U pregledaču otvorite: https://github.com/mungosthe-cpu/ObradaPodataka/releases
+2. Preuzmite **TaurisPdfApp_Lite_Setup.exe** sa release-a **2.0.1**
+3. Pokrenite instalaciju kao administrator
+4. Posle toga «Provera Nadogradnje» treba da radi normalno
+
+## Sadržaj (kao 2.0)
+- Broj trke 001–020, pouzdano TAURIS/BRICON USB preuzimanje, dijagnostika
