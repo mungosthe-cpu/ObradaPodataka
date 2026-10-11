@@ -18,6 +18,7 @@ _show_block_message = _tdl._show_block_message
 class TaurisApp:
     def __init__(self, delivery_config: DeliveryConfig) -> None:
         self.delivery_config = delivery_config
+        self._pending_retry_running = False
         self.connected = False
         self.busy = False
         self.worker_queue: Queue[tuple[str, Any]] = Queue()
@@ -57,6 +58,7 @@ class TaurisApp:
         self.root.after(150, self._startup_port_scan_and_connect)
         self.root.after(2000, self._port_poll_tick)
         self.root.after(5000, lambda: self.check_for_updates(silent_if_current=True, auto_install=True))
+        self.root.after(9000, lambda: self._retry_pending_sends_background(silent=True))
         if serial is None:
             self.status_var.set(
                 "Status: nedostaje pyserial — COM neće raditi. Instalacija: pip install pyserial"
@@ -126,7 +128,7 @@ class TaurisApp:
             if update_status:
                 if port and port in reliable:
                     self.status_var.set(
-                        f"Status: BRICON port {port} — «Preuzmi BRICON», zatim Read out na satu (USB)."
+                        f"Status: BRICON port {port} — sat priključen? Kliknite «Preuzmi BRICON» (program sam čita sat)."
                     )
                 elif reliable:
                     self.status_var.set(
@@ -238,7 +240,7 @@ class TaurisApp:
             "Windows ne vidi BRICON USB serijski port.\n\n"
             + driver_note
             + "1) Priključite sat USB kablom, pritisnite F5\n"
-            "2) «Preuzmi BRICON» — program drži port, na satu Read out (USB slave)\n\n"
+            "2) «Preuzmi BRICON» — program sam pita sat (Print Manager protokol), ništa ne pritiskate na satu\n\n"
             "Ako i dalje nema porta — ponovo pokrenite instalaciju (drajver) ili «Uvezi BRICON fajl»."
         )
 
@@ -249,11 +251,11 @@ class TaurisApp:
             "(isti COM port ne može oba).\n"
             "• USB kabl u računar pre pokretanja; napajanje sata/antena po uputstvu.\n"
             "• Na satu «traži štampač» = pogrešan režim (štampač/klub, ne USB readout).\n\n"
-            "U ovom programu (BriconLib protokol, uklj. StartReadout):\n"
-            "1) FTDI drajver (instalacioni paket) — u PM: Options → COM «auto»\n"
+            "U ovom programu (isti binarni protokol kao Print Manager, 9600 baud 8N2):\n"
+            "1) FTDI drajver (instalacioni paket)\n"
             "2) F5 — izaberite BRICON port\n"
-            "3) «Preuzmi BRICON» — handshake + StartReadout, program drži COM\n"
-            "4) Na Speedy: Read out / Uitlezen (slave) dok status broji bajtove\n"
+            "3) «Preuzmi BRICON» — program pronalazi sat i sam čita takmičara, golubove i vremena\n"
+            "4) Na satu ne treba ništa da se pritiska; sačekajte da status prikaže broj golubova\n"
             "5) «Pošalji podatke na obradu»\n\n"
             "Rezerva: u PM učitajte listu → «Uvezi BRICON fajl»."
         )
@@ -636,10 +638,10 @@ class TaurisApp:
         title = f"{dev} — preuzimanje rezultata"
         if self._get_device_kind() == CLOCK_DEVICE_BRICON:
             slow_txt = (
-                "BRICON USB: program drži COM — na satu Read out posle klika «Preuzmi BRICON»"
+                "BRICON USB: program sam čita sat (Print Manager protokol) — na satu ništa ne pritiskate"
             )
             help_txt = (
-                "1) USB (drajver u paketu), F5 port. 2) «Preuzmi BRICON», Read out na satu. "
+                "1) USB (drajver u paketu), F5 port. 2) «Preuzmi BRICON» — sačekajte da program pročita sat. "
                 "3) «Snimi COM» ako ne radi (log za analizu). 4) «Uvezi fajl». 5) Pošalji na obradu."
             )
         else:
@@ -865,6 +867,7 @@ class TaurisApp:
         if not tauris_is_lite_edition():
             menu_baza.add_command(label="Otvori zaključan folder", command=self.baza_extract_pdfs_from_locks)
             menu_baza.add_command(label="Otvori zaključan paket", command=self.open_locked_bundle)
+        menu_baza.add_command(label="Pošalji neposlate pakete", command=self.baza_send_pending)
         menu_baza.add_command(
             label="Provera Nadogradje",
             command=lambda: self.check_for_updates(auto_install=True),
@@ -1280,6 +1283,51 @@ class TaurisApp:
         except Exception:
             logging.exception("Neuspešno otvaranje Open PDF/Open TXT foldera.")
 
+    def baza_send_pending(self) -> None:
+        """Baza → Pošalji neposlate pakete: ručno pokretanje naknadnog slanja iz reda."""
+        from tauris_desktop.pending_sends import load_pending_sends, summarize_pending_for_user
+
+        items = load_pending_sends()
+        if not items:
+            messagebox.showinfo("Neposlati paketi", "Nema neposlatih paketa — sve je poslato.", parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "Neposlati paketi",
+            summarize_pending_for_user(items) + "\n\nPokušati slanje sada?",
+            parent=self.root,
+        ):
+            return
+        self._retry_pending_sends_background(silent=False)
+
+    def _retry_pending_sends_background(self, *, silent: bool) -> None:
+        """Pokušaj slanja paketa iz reda u pozadinskoj niti; rezultat stiže kroz worker_queue."""
+        from tauris_desktop.pending_sends import pending_count
+
+        if self._pending_retry_running:
+            return
+        if silent and pending_count() == 0:
+            return
+        self._pending_retry_running = True
+        if not silent:
+            self._set_busy(True)
+            self.status_var.set("Status: šaljem neposlate pakete na obradu…")
+
+        def _worker() -> None:
+            from tauris_desktop.pending_sends import retry_pending_sends
+
+            try:
+                sent, remaining, notes = retry_pending_sends(self.delivery_config)
+            except Exception as exc:
+                logging.exception("Naknadno slanje paketa iz reda nije uspelo.")
+                sent, remaining, notes = 0, pending_count(), [f"Greška: {exc}"]
+            finally:
+                self._pending_retry_running = False
+            if silent and sent == 0:
+                return
+            self.worker_queue.put(("pending_sends_done", (sent, remaining, notes, silent)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def check_for_updates(self, *, silent_if_current: bool = False, auto_install: bool = False) -> None:
         if self._upgrade_in_progress:
             return
@@ -1488,14 +1536,14 @@ class TaurisApp:
             "Snima se sav saobracaj na portu "
             f"{port} (~3 minuta).\n\n"
             "1) Zatvorite Print Manager\n"
-            "2) Kliknite OK — program drzi COM (PM handshake)\n"
-            "3) Na satu pokrenite Read out / Uitlezen\n\n"
+            "2) Kliknite OK — program pita sat PM protokolom (9600 8N2)\n"
+            "3) Na satu ne treba nista da pritiskate\n\n"
             "Log se cuva u logs/bricon_capture/ za analizu.",
             parent=self.root,
         ):
             return
         self._set_busy(True)
-        self.status_var.set(f"Status: snimam COM {port} — pokrenite Read out na satu…")
+        self.status_var.set(f"Status: snimam COM {port} — čekam odgovor sata…")
         threading.Thread(
             target=self._worker_bricon_com_capture,
             args=(port, 180.0),
@@ -1610,7 +1658,7 @@ class TaurisApp:
         self._set_busy(True)
         if self._get_device_kind() == CLOCK_DEVICE_BRICON:
             self.status_var.set(
-                "Status: BRICON USB — COM otvoren. Sada na satu pokrenite Read out / Uitlezen."
+                "Status: BRICON USB — tražim sat na portu (Print Manager protokol)…"
             )
         else:
             self.status_var.set(
@@ -1758,7 +1806,7 @@ class TaurisApp:
         last_show = [0.0]
         dev_label = "BRICON" if device_kind == CLOCK_DEVICE_BRICON else "TAURIS"
         hint = (
-            "Na BRICON-u držite Read out (USB) dok se lista ne preuzme."
+            "BRICON: program čita sat — sačekajte, ne isključujte kabl."
             if device_kind == CLOCK_DEVICE_BRICON
             else "Na TAURIS-u zadržite slanje podataka do kraja liste."
         )
@@ -1909,6 +1957,7 @@ class TaurisApp:
                 delivery_note,
             )
             self.root.after(80, lambda: notify_download_complete(self.root))
+            self.root.after(30000, lambda: self._retry_pending_sends_background(silent=True))
             self.root.after(
                 180,
                 lambda p=locked_bundle_path, rd=race_data, dn=delivery_note: show_download_result_preview(
@@ -1921,6 +1970,22 @@ class TaurisApp:
                 self.root.after(240000, lambda p=preview_path: p.unlink(missing_ok=True))
             except Exception:
                 logging.exception("Neuspešna priprema PDF preview-a iz privremenog fajla.")
+        elif event_type == "pending_sends_done":
+            sent, remaining, notes, silent = payload
+            if sent or remaining:
+                self.status_var.set(
+                    f"Status: naknadno slanje — poslato {sent}, u redu još {remaining}."
+                )
+            if not silent:
+                body = "\n".join(notes) if notes else "Nema neposlatih paketa."
+                messagebox.showinfo("Neposlati paketi", f"Poslato: {sent}\nPreostalo u redu: {remaining}\n\n{body}", parent=self.root)
+            elif sent:
+                messagebox.showinfo(
+                    "Neposlati paketi",
+                    f"Internet je dostupan — naknadno poslato {sent} paket(a) na obradu."
+                    + (f"\nU redu je ostalo još {remaining}." if remaining else ""),
+                    parent=self.root,
+                )
         elif event_type == "bricon_capture_ok":
             path, summary, report = payload
             self.status_var.set(f"Status: COM snimak sacuvan — {path.name}")

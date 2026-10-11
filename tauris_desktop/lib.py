@@ -235,24 +235,22 @@ def prepare_serial_port_for_passive_listen(ser: Any, *, device_label: str = "ure
 
 def prepare_serial_port_for_bricon(ser: Any, *, mode: str) -> None:
     """
-    Postavlja DTR/RTS pre BRICON komunikacije. Jedino mesto koje to radi — bricon.py i
-    bricon_pm.py su ranije imali dva gotovo identična, ali kontradiktorna helpera
-    (različit RTS, različit reset bafera) bez objašnjenja koje je od njih namerno.
+    Postavlja DTR/RTS pre BRICON komunikacije. Jedino mesto koje to radi.
 
-    mode="usb_passive": pasivno USB-CDC slušanje (bez PM komandi, kao TAURIS slušanje) —
-        deli logiku sa prepare_serial_port_for_passive_listen (i TAURIS je koristi).
-    mode="pm_protocol": aktivan Print Manager binarni protokol (SendVersionInfo,
-        StartReadout, GetFancier — BriconLib.dll). RTS=True jer PM očekuje standardnu
-        RTS linija za hardverski handshake pri slanju komandi; bez nje sat u nekim
-        slučajevima ne odgovara na SendVersionInfo.
+    mode="usb_passive": pasivno slušanje (bez PM komandi, kao TAURIS slušanje) —
+        deli logiku sa prepare_serial_port_for_passive_listen.
+    mode="pm_protocol": Print Manager binarni protokol. Isto kao
+        ``Communication.StartComm`` u BriconLib.dll: ``RtsEnable = True``; .NET SerialPort
+        ima ``DtrEnable = false`` podrazumevano, pa ni mi ne dižemo DTR. Baferi se čiste
+        pre svake komande (``DiscardInBuffer``/``DiscardOutBuffer``) — i ovde.
 
-    Ne menjaj ove vrednosti bez testa na stvarnom uređaju — obe su namerno različite.
+    Ne menjaj ove vrednosti bez testa na stvarnom uređaju.
     """
     if mode == "usb_passive":
         prepare_serial_port_for_passive_listen(ser, device_label="BRICON")
         return
     try:
-        ser.setDTR(True)
+        ser.setDTR(False)
         ser.setRTS(True)
     except Exception as exc:
         logging.debug("BRICON: DTR/RTS podešavanje nije uspelo (mode=%s): %s: %s", mode, type(exc).__name__, exc)
@@ -570,9 +568,32 @@ def parse_tauris_expected_last_lag(text: str) -> int | None:
 
 
 def tauris_text_has_lag_row(text: str, last_lag: int) -> bool:
-    """True ako postoji red koji počinje sa „NNNN SRB“ (npr. 0040 SRB)."""
+    """
+    True ako postoji red „NNNN SRB“ (npr. 0040 SRB). Stvarni ispis sata uvlači SVAKI red sa
+    nekoliko razmaka (vidi logs/tauris_capture), zato ``^\\s*`` — bez toga provera nikad nije
+    prolazila i svako čitanje je završavalo lažnim upozorenjem.
+    """
     lag = f"{last_lag:04d}"
-    return bool(re.search(rf"(?m)^{re.escape(lag)}\s+SRB\b", text))
+    return bool(re.search(rf"(?m)^\s*{re.escape(lag)}\s+SRB\b", text))
+
+
+def assess_tauris_transfer_quality(raw: bytes) -> tuple[bool, str]:
+    """
+    Da li primljeni bajtovi liče na ispravan TAURIS tekst ili na oštećen prenos (npr. klizanje
+    takta UART-a: crtice postaju 0xD6, razmaci 0x02/0x06 — primer 23.08.2026).
+    Vraća (ok, opis). Ne pada zbog imena sa č/ć/š — dozvoljeno je do 15 % bajtova ≥ 0x80.
+    """
+    if not raw:
+        return False, "nema podataka"
+    n = len(raw)
+    ctrl = sum(1 for b in raw if b < 32 and b not in (9, 10, 13))
+    high = sum(1 for b in raw if b >= 128)
+    ctrl_ratio = ctrl / n
+    high_ratio = high / n
+    desc = f"kontrolnih bajtova {ctrl_ratio:.1%}, bajtova ≥0x80 {high_ratio:.1%} (ukupno {n} B)"
+    if ctrl_ratio > TAURIS_MAX_CONTROL_BYTE_RATIO or high_ratio > TAURIS_MAX_HIGH_BYTE_RATIO:
+        return False, desc
+    return True, desc
 
 
 def _parse_version_parts(version_text: str) -> tuple[int, ...]:
@@ -1236,15 +1257,19 @@ def read_race_from_device(
             ser, config, on_com_bytes=_notify(0), on_error=_on_read_error
         )
         _phase(f"preuzimanje u toku — primljeno {len(raw)} B…")
+        # „Dopuna“: sat pravi pauze usred liste duže od idle praga. Ako kontrol-lista u zaglavlju
+        # kaže do kog rednog broja ide, čekamo još malo dok se taj red ne pojavi. Rezult.list ne
+        # mora da sadrži sve ukorpane golubove, pa izostanak reda NIJE greška — samo kraj čitanja.
         for _ in range(4):
             _check_cancel()
             if read_errors:
                 break
-            probe = decode_com_payload(raw)
+            probe = decode_com_payload(raw, quiet=True)
             expected_last = parse_tauris_expected_last_lag(probe)
             if expected_last is None or tauris_text_has_lag_row(probe, expected_last):
                 break
             n_before = len(raw)
+            _phase(f"primljeno {len(raw)} B — proveravam da li sat šalje još…")
             more = read_serial_bytes_until_idle(
                 ser,
                 config,
@@ -1255,13 +1280,11 @@ def read_race_from_device(
             )
             raw = raw + more
             if len(raw) == n_before:
-                logging.warning(
-                    "TAURIS: u tekstu nema reda %04d SRB iako kontrol lista traži do tog broja; "
-                    "nema novih bajtova — proverite kabl/baud ili ponovo pokrenite slanje.",
+                logging.info(
+                    "TAURIS: kraj prenosa posle %s B (zaglavlje navodi do Lag=%04d, red nije u listi — "
+                    "uobičajeno za Rezult.list).",
+                    len(raw),
                     expected_last,
-                )
-                _save_tauris_incomplete_diagnostic(
-                    config.port, raw, reason=f"nedostaje red {expected_last:04d} SRB — nema novih bajtova"
                 )
                 break
             logging.info(
@@ -1301,6 +1324,26 @@ def read_race_from_device(
             "TAURIS diag | port=%s baud=%s phase=read_error trajanje=%.2fs primljeno=%sB tip_greske=%s "
             "— parcijalni podaci se ipak obrađuju.",
             config.port, config.baudrate, duration, len(raw), type(read_errors[0]).__name__,
+        )
+
+    quality_ok, quality_desc = assess_tauris_transfer_quality(raw)
+    if not quality_ok:
+        diag_path = _save_tauris_incomplete_diagnostic(
+            config.port, raw, reason=f"oštećen prenos: {quality_desc}"
+        )
+        logging.warning(
+            "TAURIS diag | port=%s baud=%s phase=corrupted trajanje=%.2fs primljeno=%sB %s diag=%s",
+            config.port, config.baudrate, duration, len(raw), quality_desc, diag_path,
+        )
+        _phase("greška — primljeni podaci su oštećeni.")
+        raise RuntimeError(
+            "Prenos sa TAURIS sata je OŠTEĆEN — tekst je nečitljiv "
+            f"({quality_desc}).\n\n"
+            "Ovo je greška na vezi (brzina/takt UART-a, kabl, adapter, baterija sata), ne u programu. "
+            "Rezultat NIJE sačuvan ni poslat.\n\n"
+            "Uradite: proverite baud u programu i na satu (obično 9600), promenite USB-serijski "
+            "adapter ili kabl, pa ponovo pokrenite slanje na satu.\n\n"
+            + (f"Sirovi bajtovi sačuvani za dijagnostiku: {diag_path}" if diag_path else "")
         )
 
     _phase("parsiranje primljenih podataka…")
@@ -3212,13 +3255,31 @@ def run_pipeline(
             protected_payload, json_path, pdf_path, txt_path, delivery_config
         )
     except Exception as exc:
-        logging.exception("Slanje rezultata nije uspelo; paket je sačuvan.")
+        from tauris_desktop.pending_sends import enqueue_pending_send
+
+        staza = _parse_staza_from_results_folder_name(locked_bundle_path.parent.name) or ("", "")
+        n_pending = enqueue_pending_send(
+            locked_bundle_path, broj_trke=staza[0], grupacija=staza[1], error=f"{type(exc).__name__}: {exc}"
+        )
         if _is_network_unreachable_error(exc):
-            delivery_note = _offline_send_instructions_for_locked_bundle(locked_bundle_path)
+            # Očekivana situacija na terenu — jedna linija u logu, bez traceback-a.
+            logging.warning(
+                "Nema internet veze — paket nije poslat, čeka u redu (%s u redu): %s",
+                n_pending, locked_bundle_path.name,
+            )
+            delivery_note = (
+                "Nema internet veze — paket je sačuvan i stavljen u red za slanje.\n\n"
+                "Program će ga sam poslati kad veza bude dostupna (pri sledećem pokretanju ili "
+                "iz menija Baza → «Pošalji neposlate pakete»).\n\n"
+                f"Neposlatih paketa u redu: {n_pending}\n"
+                f"Zaključan paket: {locked_bundle_path}"
+            )
         else:
+            logging.exception("Slanje rezultata nije uspelo; paket je sačuvan i stavljen u red.")
             delivery_note = (
                 f"Upozorenje: automatsko slanje nije uspelo ({exc}). "
-                "Zaključan paket je sačuvan lokalno — proverite podešavanja slanja na obradu."
+                "Zaključan paket je sačuvan lokalno i stavljen u red za naknadno slanje "
+                f"(u redu: {n_pending}) — proverite podešavanja slanja na obradu."
             )
     remove_plain_exports(json_path, pdf_path, txt_path)
     return locked_bundle_path, delivery_note, pdf_bytes

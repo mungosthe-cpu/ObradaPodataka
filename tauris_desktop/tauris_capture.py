@@ -33,10 +33,11 @@ def _safe_port_tag(port: str) -> str:
     return re.sub(r"[^\w\-]+", "_", (port or "?").strip().upper())
 
 
-def _hex_and_ascii(raw: bytes, limit: int = 512) -> tuple[str, str]:
-    data = raw[:limit]
-    hex_line = " ".join(f"{b:02x}" for b in data)
-    ascii_line = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
+def _hex_and_ascii(raw: bytes, limit: int | None = None) -> tuple[str, str]:
+    """Ceo payload (podrazumevano) — lista je ~2–5 KB, a baš kraj liste je ono što se analizira."""
+    data = raw if limit is None else raw[:limit]
+    hex_line = "\n".join(data[i : i + 32].hex(" ") for i in range(0, len(data), 32))
+    ascii_line = "".join(chr(b) if 32 <= b < 127 else ("\n" if b == 10 else ".") for b in data)
     return hex_line, ascii_line
 
 
@@ -56,10 +57,10 @@ def save_tauris_partial_payload_diagnostic(port: str, raw: bytes, *, reason: str
             f"# Vreme: {datetime.now().isoformat(timespec='seconds')}\n"
             f"# Razlog: {reason}\n"
             f"# Dužina: {len(raw)} B\n"
-            f"# Format: hex | ascii (prvih {min(len(raw), 512)} B)\n"
+            f"# Format: hex (32 B po redu) pa ASCII — ceo payload\n"
         )
         fh.write(hex_line + "\n")
-        fh.write(f"ASCII: {ascii_line}\n")
+        fh.write("ASCII:\n" + ascii_line + "\n")
     logging.info("TAURIS parcijalni podaci sačuvani: %s (%s B)", path, len(raw))
     return path
 

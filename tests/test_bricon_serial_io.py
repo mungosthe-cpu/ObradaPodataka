@@ -182,6 +182,7 @@ def test_first_baud_fails_second_succeeds(monkeypatch: pytest.MonkeyPatch) -> No
 # ---------------------------------------------------------------------------
 def test_all_bauds_fail_tries_every_candidate_quickly(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _install_fake_serial(monkeypatch, {})  # svi bauds vraćaju prazno (nema podataka)
+    monkeypatch.setattr(br, "BRICON_USB_PASSIVE_FALLBACK_MAX_BAUDS", 5)
     t0 = time.monotonic()
     with pytest.raises(RuntimeError) as excinfo:
         br.read_race_from_bricon_usb_readout(_config(baudrate=9600), max_listen_sec=5.0)
@@ -191,7 +192,7 @@ def test_all_bauds_fail_tries_every_candidate_quickly(monkeypatch: pytest.Monkey
     assert calls == expected_bauds, "svaki podržani baud mora biti probran tačno jednom"
     # Sa BRICON_USB_PER_BAUD_MIN_SEC=0.6s i 5 baud-ova, gornja granica je ~5*0.6s + margina.
     assert elapsed < 6.0, f"fallback nije smeo da potroši sve vreme na jedan baud (trajalo {elapsed:.2f}s)"
-    assert "Nije primljen nijedan podatak" in str(excinfo.value)
+    assert "nije nađen" in str(excinfo.value)
     for b in expected_bauds:
         assert str(b) in str(excinfo.value)
 
@@ -269,7 +270,7 @@ def test_incomplete_packet_saves_diagnostic_file(
 # ---------------------------------------------------------------------------
 def test_timeout_no_data_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_serial(monkeypatch, {})
-    with pytest.raises(RuntimeError, match="Nije primljen nijedan podatak"):
+    with pytest.raises(RuntimeError, match="nije nađen"):
         br.read_race_from_bricon_usb_readout(_config(baudrate=9600), max_listen_sec=5.0)
 
 
@@ -286,53 +287,17 @@ def test_successful_bricon_readout_end_to_end(monkeypatch: pytest.MonkeyPatch) -
 
 
 # ---------------------------------------------------------------------------
-# 7) BRICON PM (Print Manager) režim — handshake + komande + slušanje.
+# 7) BRICON PM (Print Manager) režim — detaljno u tests/test_bricon_pm_protocol.py.
+#    Ovde samo: kad PM ne nađe sat, read_race_from_bricon_usb_readout ide na kratak
+#    pasivni fallback (štampački kabl), ne na minute čekanja po svim baud-ovima.
 # ---------------------------------------------------------------------------
-def test_pm_protocol_full_handshake_and_readout(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Ubrzaj sve fiksne cekanje-prozore protokola da test ne traje kao pravih ~10s.
-    monkeypatch.setattr(pm, "PM_RESPONSE_WAIT_SEC", 0.08)
-    monkeypatch.setattr(pm, "PM_COMMAND_RESPONSE_WAIT_SEC", 0.08)
-    monkeypatch.setattr(pm, "PM_POST_COMMAND_DELAY_SEC", 0.01)
-    monkeypatch.setattr(pm, "PM_CAPTURE_MIN_LISTEN_SEC", 1.2)
-
-    payload = SAMPLE_BRICON_TEXT.encode("utf-8")
-
-    def factory(*, port: str, baudrate: int, **kwargs: Any) -> FakeBriconSerial:
-        if baudrate == 38400:
-            # Odgovor na SendVersionInfo signalizira prelazak na 9600; sam payload liste
-            # (delayed_chunks) postaje "vidljiv" tek posle dosta poll-ova (handshake + 4
-            # komande) — kao kod pravog uredjaja, koji salje listu tek posto pocne
-            # "Read out" slusanje, ne odmah posle handshake-a.
-            return FakeBriconSerial(
-                port=port,
-                baudrate=baudrate,
-                chunks=[bytes([pm.RS_SWITCH_TO_9600])],
-                delayed_chunks=[payload],
-                delay_after_polls=25,
-            )
-        return FakeBriconSerial(port=port, baudrate=baudrate, chunks=[])
-
-    calls: list[int] = []
-    monkeypatch.setattr(pm, "serial", FakeSerialModule(factory, calls))
-
-    raw = pm.read_raw_via_print_manager_protocol("COM5", listen_sec=1.2)
-    assert len(raw) >= 40
-    assert br.decode_bricon_payload(raw).strip().startswith("BRICON")
-    assert calls == [38400], "handshake je uspeo na prvom kandidatu, drugi ne treba da se probuje"
-
-
-def test_pm_protocol_no_response_falls_back_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pm, "PM_RESPONSE_WAIT_SEC", 0.05)
-    monkeypatch.setattr(pm, "PM_CAPTURE_MIN_LISTEN_SEC", 0.1)
-    calls: list[int] = []
-
-    def factory(*, port: str, baudrate: int, **kwargs: Any) -> FakeBriconSerial:
-        return FakeBriconSerial(port=port, baudrate=baudrate, chunks=[])
-
-    monkeypatch.setattr(pm, "serial", FakeSerialModule(factory, calls))
-    result = pm.try_print_manager_protocol_readout(_config(baudrate=9600), max_listen_sec=0.1)
-    assert result is None
-    assert calls == [38400, 9600], "oba PM baud kandidata moraju biti probana pre odustajanja"
+def test_pm_failure_falls_back_to_short_passive_listen(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _install_fake_serial(monkeypatch, {})
+    monkeypatch.setattr(br, "BRICON_USB_PASSIVE_FALLBACK_MAX_SEC", 1.0)
+    with pytest.raises(RuntimeError) as ei:
+        br.read_race_from_bricon_usb_readout(_config(baudrate=19200), max_listen_sec=1.0)
+    assert "nije nađen" in str(ei.value)
+    assert calls == [19200, 9600], "pasivni fallback: izabrani baud + 9600, ne svih pet"
 
 
 # ---------------------------------------------------------------------------
@@ -348,9 +313,10 @@ def test_dtr_rts_usb_passive_vs_pm_protocol() -> None:
     assert usb_port.reset_input_calls == 1
     assert usb_port.reset_output_calls == 0
 
-    pm_port = FakeBriconSerial(port="COM3", baudrate=38400)
+    # PM režim = kao Communication.StartComm u BriconLib.dll: RTS=True, DTR ostaje spušten
+    pm_port = FakeBriconSerial(port="COM3", baudrate=9600)
     prepare_serial_port_for_bricon(pm_port, mode="pm_protocol")
-    assert pm_port.dtr is True
+    assert pm_port.dtr is False
     assert pm_port.rts is True
     assert pm_port.reset_input_calls == 1
     assert pm_port.reset_output_calls == 1
@@ -361,9 +327,9 @@ def test_bricon_and_pm_prepare_helpers_delegate_to_shared_function() -> None:
     br._prepare_bricon_usb_serial(usb_port)
     assert (usb_port.dtr, usb_port.rts) == (True, False)
 
-    pm_port = FakeBriconSerial(port="COM3", baudrate=38400)
+    pm_port = FakeBriconSerial(port="COM3", baudrate=9600)
     pm._prepare_pm_serial(pm_port)
-    assert (pm_port.dtr, pm_port.rts) == (True, True)
+    assert (pm_port.dtr, pm_port.rts) == (False, True)
 
 
 # ---------------------------------------------------------------------------

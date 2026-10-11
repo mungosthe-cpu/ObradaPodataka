@@ -164,6 +164,13 @@ class CapturingSerialWrapper:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._ser, name)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # rts/dtr/timeout i sl. moraju da stignu do pravog porta, ne do omotača.
+        if name == "baudrate":
+            type(self).baudrate.fset(self, value)  # type: ignore[attr-defined]
+            return
+        setattr(self._ser, name, value)
+
 
 def wrap_serial_for_capture(ser: Any, capture: BriconComCapture | None) -> Any:
     if capture is None:
@@ -256,7 +263,7 @@ def run_com_capture_session(
         note="Dijagnostika — zatvorite Print Manager pre snimanja",
     )
     cap.log_note(
-        "Posle starta pokrenite Read out / Uitlezen na satu (slave USB, ne stampac)"
+        "PM protokol: program sam pita sat (9600 8N2) — na satu nista ne treba pritiskati"
     )
     raw = bytearray()
     try:
@@ -321,28 +328,46 @@ def analyze_capture_file(path: Path) -> str:
     lines = text.splitlines()
     tx_count = sum(1 for ln in lines if "] TX " in ln)
     rx_count = sum(1 for ln in lines if "] RX " in ln)
-    raw_hex = re.findall(r"^    ([0-9a-f ]+)$", text, re.MULTILINE)
-    all_bytes = bytearray()
-    for hx in raw_hex[:200]:
-        try:
-            all_bytes.extend(bytes.fromhex(hx.replace(" ", "")))
-        except ValueError:
-            pass
-    blob = bytes(all_bytes)
+    # Razdvoji TX i RX bajtove po blokovima ("[t] TX n B" / "[t] RX n B" pa hex redovi).
+    tx_bytes = bytearray()
+    rx_bytes = bytearray()
+    current: bytearray | None = None
+    for ln in lines:
+        if "] TX " in ln:
+            current = tx_bytes
+            continue
+        if "] RX " in ln:
+            current = rx_bytes
+            continue
+        m = re.match(r"^    ([0-9a-f]{2}(?: [0-9a-f]{2})*)\s*$", ln)
+        if m and current is not None:
+            try:
+                current.extend(bytes.fromhex(m.group(1).replace(" ", "")))
+            except ValueError:
+                pass
+        elif ln.startswith("    ASCII:"):
+            current = None
+    blob = bytes(rx_bytes)
+    tx = bytes(tx_bytes)
     notes: list[str] = [
         f"Fajl: {path}",
         f"TX blokova: {tx_count}, RX blokova: {rx_count}",
     ]
-    if bytes([0x10, 0x70, 0x13]) in blob:
-        notes.append("[OK] Prepoznat PM SendVersionInfo (10 70 13 …)")
-    if 113 in blob:
-        notes.append("[OK] Sat trazi prelazak na 9600 baud (status 113)")
-    if 114 in blob:
-        notes.append("[OK] Sat trazi prelazak na 38400 baud (status 114)")
-    if b"\xff\xfa" in blob.lower():
-        notes.append("[OK] FF FA komande (PM GetFancier/Flight)")
+    if tx and tx[0] == 0x6C:
+        notes.append("[OK] TX okviri sa PM start-bajtom 0x6C (Print Manager uokviravanje)")
+    rx_starts = blob.count(b"\x33")
+    if rx_count and rx_starts:
+        notes.append(f"[OK] RX sadrzi {rx_starts} x 0x33 (pocetak PM odgovora) — sat se javlja")
+    elif rx_count == 0:
+        notes.append("[!!] RX=0 — sat ne odgovara: proverite port, kabl, 9600 8N2, zatvoren Print Manager")
+    if b"\x6c\x10\x61\x00" in tx:
+        notes.append("[OK] ActivateMaster (10 61 00) poslat")
+    if any(bytes([0x6C, a, 0xC0]) in tx for a in range(0x80, 0x86)):
+        notes.append("[OK] ActivateBA (AA C0 01 00) poslat na BA adrese")
+    if any(bytes([0x6C, a, 0xC8]) in tx for a in range(0x80, 0x86)):
+        notes.append("[OK] GetPigeon komande — citanje golubova je krenulo")
     if b"lista doleta" in blob.lower() or b"bricon speedy" in blob.lower():
-        notes.append("[OK] Tekst liste doleta u RX")
+        notes.append("[OK] Tekst liste doleta u RX (stampacki kabl / pasivni rezim)")
     try:
         from tauris_desktop.bricon import decode_bricon_payload, validate_bricon_payload
 

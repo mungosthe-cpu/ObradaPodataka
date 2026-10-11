@@ -28,6 +28,8 @@ from tauris_desktop.config import (
     BRICON_TAIL_IDLE_EMPTY_READS,
     BRICON_TAIL_IDLE_EMPTY_READS_SLOW,
     BRICON_USB_BAUD_CANDIDATES,
+    BRICON_USB_PASSIVE_FALLBACK_MAX_BAUDS,
+    BRICON_USB_PASSIVE_FALLBACK_MAX_SEC,
     BRICON_USB_PER_BAUD_MIN_SEC,
     BRICON_USB_READOUT_MAX_SEC,
     BRICON_USB_READOUT_MIN_TOTAL_SEC,
@@ -85,20 +87,20 @@ _RE_SPEEDY_DEVICE = re.compile(
 )
 _RE_LISTA_DOLETA = re.compile(r"(?im)lista\s+doleta")
 _RE_SPEEDY_MEMBER = re.compile(
-    r"(?im)^\s*(C\d{3,7})\s+([A-ZČĆŽŠĐ][A-ZČĆŽŠĐa-zčćžšđ\s\-]{2,80})\s*$",
+    r"(?im)^[ \t]*(C\d{3,7})[ \t]+([A-ZČĆŽŠĐ][A-ZČĆŽŠĐa-zčćžšđ \t\-]{2,80}?)[ \t]*$",
 )
 _RE_PAKOVANJE_COUNT = re.compile(r"(?im)pakovanje\s*:\s*(\d+)\s*$")
 _RE_SPEEDY_ARRIVAL_ROW = re.compile(
     r"(?im)^\s*"
     r"(\d{1,4})\s+"
     r"([A-F0-9]{8})\s+"
-    r"([A-Z]{2}-\d{2}-\d{6,14})\s+"
-    r"([A-Z])\s+"
-    r"([A-Z]{2,10})\s+"
+    r"([A-Z]{1,4}[-\s]?\d{2,4}[-\s]?\d{4,14}|[A-Z0-9][A-Z0-9\-/]{3,21})\s+"
+    r"(?:([A-Z])\s+([A-Z]{2,10})\s+)?"
     r"(\d{2}/\d{2})\s+"
     r"(\d{2}:\d{2}:\d{2})"
     r"(?:\s+:[0-9A-F]{2}:\s*\d:\s*)*"
-    r"(?:\s+(OK|ERR|FAIL))?\s*$",
+    r"(?:\s+let:\S+)?"
+    r"(?:\s+(OK|ERR|FAIL|[A-Z0-9]))?\s*$",
 )
 
 
@@ -219,6 +221,8 @@ def parse_bricon_speedy_arrival_rows(text: str) -> list[dict[str, str]]:
     for m in _RE_SPEEDY_ARRIVAL_ROW.finditer(text or ""):
         pos, chip, ring, gender, color, mm_dd, time_s = m.group(1, 2, 3, 4, 5, 6, 7)
         status_g = m.group(8)
+        gender = gender or ""
+        color = color or ""
         ring_n = ring.strip().upper()
         time_n = time_s.strip()
         key = (ring_n, time_n)
@@ -523,12 +527,13 @@ def read_race_from_bricon_usb_readout(
     """
     Zamena za Print Manager «Uitlezen» preko USB:
 
-    1) Print Manager binarni handshake (SendVersionInfo + baud 9600/38400).
-    2) Program drži COM; korisnik na satu pokrene Read out (slave mode).
-    3) Fallback: pasivno slušanje — SVAKA podržana baud vrednost dobija sopstveni
-       vremenski budžet (``per_baud_budget``), tako da jedan neuspešan pokušaj ne
-       potroši vreme predviđeno za ostale (ranije je ceo budžet trošio prvi baud iz
-       liste i fallback na ostale se praktično nikad nije izvršavao).
+    1) Print Manager binarni protokol (bricon_pm.py): 9600 baud 8N2, otkrivanje sata
+       (ActivateMaster/ActivateBA), pa GetFancier / GetPigeon / GetTimer — program je
+       „master“, sat samo odgovara; korisnik ne mora ništa da pritiska na satu.
+    2) Rezultat se renderuje u tekst „lista doleta“ (isti oblik kao štampana lista) i
+       dodatno čuva strukturirano (bricon_pm_*).
+    3) Fallback: kratko pasivno slušanje (štampački RS-232 kabl) — izabrani baud + 9600,
+       najviše ``BRICON_USB_PASSIVE_FALLBACK_MAX_SEC``.
 
     ``on_phase`` (opciono) dobija kratke tekstualne statuse za GUI (traženje porta,
     povezivanje, koji baud se proba, čitanje, završetak/greška) da korisnik vidi šta
@@ -572,8 +577,8 @@ def read_race_from_bricon_usb_readout(
 
     try:
         _check_cancel()
-        _phase("pokušavam Print Manager protokol (handshake)…")
-        pm_raw = try_print_manager_protocol_readout(
+        _phase("Print Manager protokol: tražim sat na USB kablu…")
+        pm_readout = try_print_manager_protocol_readout(
             config,
             on_com_bytes=on_com_bytes,
             max_listen_sec=max_listen_sec,
@@ -581,29 +586,36 @@ def read_race_from_bricon_usb_readout(
             on_phase=_phase,
             should_cancel=should_cancel,
         )
-        if pm_raw:
-            text = decode_bricon_payload(pm_raw)
-            try:
-                validate_bricon_payload(text)
-                data = parse_bricon_payload_to_race_dict(text)
-                data["bricon_capture_mode"] = "usb_pm_protocol"
-                _phase(f"završeno preko PM protokola — primljeno {len(pm_raw)} B.")
-                return data
-            except RuntimeError:
-                logging.info(
-                    "BRICON diag | phase=pm_fallback bytes=%s razlog=parser_ne_prepoznaje",
-                    len(pm_raw),
-                )
+        if pm_readout is not None:
+            from tauris_desktop.bricon_pm import readout_to_structured, render_lista_doleta
 
+            text = render_lista_doleta(pm_readout)
+            data = parse_bricon_payload_to_race_dict(text)
+            data.update(readout_to_structured(pm_readout))
+            data["bricon_capture_mode"] = "usb_pm_protocol"
+            if pm_readout.fancier.name and not data.get("takmicar"):
+                data["takmicar"] = pm_readout.fancier.name
+            _phase(
+                f"završeno preko PM protokola — {len(pm_readout.pigeons)} golubova, "
+                f"{len(pm_readout.timers)} vremena."
+            )
+            return data
+
+        # Pasivni fallback ima smisla samo za štampački (RS-232) kabl — preko USB-a sat
+        # nikad ne šalje tekst sam od sebe. Zato kratko: izabrani baud (+9600), max 40 s.
         _check_cancel()
         profile = _bricon_connection_profile(config, slow=True)
-        overall_budget = max(BRICON_USB_READOUT_MIN_TOTAL_SEC, float(max_listen_sec))
+        overall_budget = max(
+            BRICON_USB_READOUT_MIN_TOTAL_SEC,
+            min(float(max_listen_sec), BRICON_USB_PASSIVE_FALLBACK_MAX_SEC),
+        )
         overall_deadline = time.monotonic() + overall_budget
 
         bauds: list[int] = []
         for b in (config.baudrate, *BRICON_USB_BAUD_CANDIDATES):
             if b not in bauds:
                 bauds.append(b)
+        bauds = bauds[:BRICON_USB_PASSIVE_FALLBACK_MAX_BAUDS]
 
         per_baud_budget = max(BRICON_USB_PER_BAUD_MIN_SEC, overall_budget / len(bauds))
 
@@ -743,13 +755,13 @@ def read_race_from_bricon_usb_readout(
 
         if not raw:
             hint = (
-                "Nije primljen nijedan podatak sa BRICON USB porta.\n\n"
-                "Kao u Print Manageru (C:\\Bricon\\Print Manager):\n"
-                "• Zatvorite Print Manager — ne deli COM sa ovim programom\n"
-                "• USB kabl pre starta; FTDI drajver iz instalera Tauris\n"
-                "• «Preuzmi BRICON» šalje StartReadout (10-E1-00) + drži COM\n"
-                "• Zatim na Speedy: Read out / Uitlezen (slave, ne štampač)\n\n"
-                f"Pokušani baud-ovi:\n{attempts_text}\n\n"
+                "BRICON sat nije nađen na USB portu.\n\n"
+                "Program radi isto što i Print Manager (9600 baud, 8N2, Print Manager okviri):\n"
+                "• Zatvorite Print Manager — ne deli COM port sa ovim programom\n"
+                "• Priključite sat USB kablom PRE klika na «Preuzmi BRICON» (FTDI drajver iz instalera)\n"
+                "• Izaberite pravi COM port (F5 za osvežavanje liste)\n"
+                "• Sat treba da bude uključen i u normalnom režimu (ne štampač)\n\n"
+                f"Pasivno slušanje (štampački kabl) — probani baud-ovi:\n{attempts_text}\n\n"
             )
             if last_error:
                 hint += f"Poslednja greška: {last_error}\n\n"

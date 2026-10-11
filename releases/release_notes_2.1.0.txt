@@ -1,0 +1,30 @@
+TaurisPdfApp **2.1.0** — BRICON čitanje preko USB-a radi kao Print Manager; TAURIS bez lažnih upozorenja; slanje bez interneta ide u red
+
+## BRICON (USB kabl) — glavna izmena
+Program sada govori ISTI binarni protokol kao Bricon Print Manager (rekonstruisan iz BriconLib.dll):
+- port 9600 baud, 8N2, RTS; svaki paket uokviren (0x6C | podaci | checksum), odgovori 0x33 | … | checksum
+- sat se automatski pronalazi (ActivateMaster / ActivateBA na adresama 0x80–0x85)
+- čitaju se takmičar (GetFancier), svi golubovi (GetPigeon) i vremena ukorpavanja/očitavanja (GetTimer)
+- na satu NE treba ništa da se pritiska — program je „master“, sat samo odgovara
+- rezultat se čuva kao „lista doleta“ (isti oblik kao štampana) + strukturirani podaci u JSON-u
+- pasivno slušanje teksta (štampački kabl) ostaje samo kao kratak fallback (~40 s)
+- «Snimi COM (dijagnostika)» i analiza snimka prilagođeni novom protokolu („RX=0“ = sat ne odgovara)
+- novi CLI: scripts\bricon_pm_frame.py COM7 — proba čitanja bez GUI-ja
+
+## TAURIS
+- Ispravljena provera „poslednjeg reda“: stvarni ispis sata uvlači redove razmacima, pa provera
+  nikad nije prolazila — svako čitanje je čekalo ~14 s duže i završavalo upozorenjem „nema reda NNNN SRB“
+  i „parcijalnim“ fajlom iako je lista bila kompletna. Sada: INFO, bez lažnih upozorenja.
+- Prag tišine za kraj prenosa 2,9 s → 5 s (sat na terenu pravi duže pauze usred liste).
+- Kontrola kvaliteta prenosa: ako su bajtovi oštećeni (kao TXT od 23.08.2026 — crtice postaju 0xD6,
+  razmaci 0x02/0x06, nečitljiv tekst), program ODBIJA rezultat sa jasnom porukom (kabl/adapter/baud/baterija)
+  umesto da zaključa i pošalje nečitljiv PDF. Sirovi bajtovi se čuvaju u logs/tauris_capture/.
+- Dijagnostički fajl sada sadrži CEO payload (ranije samo prvih 512 B).
+
+## Slanje na obradu bez interneta
+- Paket koji nije mogao da se pošalje ide u red (pending_sends.json) — bez ERROR/traceback-a u logu.
+- Program sam šalje neposlate pakete kad veza bude dostupna: pri startu, posle preuzimanja,
+  ili ručno: Baza → «Pošalji neposlate pakete».
+
+## Ostalo
+- tauris_gui_settings.json, logs/, output/ i pending_sends.json više ne idu u git.

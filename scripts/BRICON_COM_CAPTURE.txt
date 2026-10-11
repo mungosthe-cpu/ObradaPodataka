@@ -1,13 +1,21 @@
-BRICON — snimanje COM saobracaja
-================================
+BRICON — USB čitanje i snimanje COM saobraćaja
+===============================================
 
-Zasto: da uporedimo nas program sa Print Managerom (bajt po bajt).
+Kako program čita BRICON sat (od verzije 2.1)
+---------------------------------------------
+Isto kao Print Manager (rekonstruisano iz BriconLib.dll):
+  - port 9600 baud, 8 bita, bez pariteta, 2 stop-bita, RTS=1
+  - svaki paket: 0x6C | payload | checksum   (checksum = (0x6C + zbir) & 0xFF)
+  - odgovor:     0x33 | adresa | komanda | len | status | podaci | checksum
+  - otkrivanje: ActivateMaster (0x10) pa ActivateBA (0x80..0x85), 100 ms po pokušaju
+  - čitanje:    GetFancier -> GetPigeon(0..) -> GetTimer(0..)
+Na satu NE treba ništa da se pritiska — program je "master", sat samo odgovara.
 
-VAZNO
+VAŽNO
 -----
-- Zatvorite Print Manager pre snimanja (isti COM port ne moze dva programa).
-- USB kabl, F5 u programu, izaberite port.
-- Tek POSLE starta snimanja: na satu Read out / Uitlezen (slave USB).
+- Zatvorite Print Manager pre rada (isti COM port ne može dva programa).
+- USB kabl u računar PRE klika, F5 u programu, izaberite port.
+- Baud iz padajuće liste se za BRICON ne koristi (protokol je uvek 9600 8N2).
 
 U programu (BRICON)
 -------------------
@@ -17,23 +25,24 @@ Log: logs/bricon_capture/bricon_COMx_YYYYMMDD_HHMMSS.log
 
 Iz komandne linije
 ------------------
-  .venv\Scripts\python.exe scripts\bricon_com_capture.py COM3 --seconds 180 --analyze
+  Proba čitanja bez GUI-ja (ispisuje listu):
+  .venv\Scripts\python.exe scripts\bricon_pm_frame.py COM7 --seconds 30 --save lista.txt
 
-Analiza postojeceg snimka
+  Snimak saobraćaja:
+  .venv\Scripts\python.exe scripts\bricon_com_capture.py COM7 --seconds 60 --analyze
+
+Analiza postojećeg snimka
 --------------------------
-  .venv\Scripts\python.exe scripts\analyze_bricon_capture.py logs\bricon_capture\bricon_COM3_....log
+  .venv\Scripts\python.exe scripts\analyze_bricon_capture.py logs\bricon_capture\bricon_COM7_....log
+  "[!!] RX=0" u analizi = sat ne odgovara (port/kabl/drajver/PM otvoren).
 
 Automatski snimak pri svakom «Preuzmi BRICON»
 ---------------------------------------------
-Postavite promenljivu okruzenja pre pokretanja:
   set TAURIS_BRICON_CAPTURE=1
 
-Uporedba sa Print Managerom
----------------------------
-Windows ne dozvoljava dva programa na istom COM portu istovremeno.
-Za snimak dok PM radi potreban je com0com (virtuelni par portova) ili
-hardverski serial tap — za vecinu korisnika dovoljno je:
-  1) Snimak iz naseg programa (ovaj alat)
-  2) Ili «Uvezi BRICON fajl» iz PM kao referenca
+Pasivni režim (štampački RS-232 kabl)
+-------------------------------------
+Ako PM protokol ne nađe sat, program još ~40 s pasivno sluša tekst (izabrani baud + 9600).
+To ima smisla samo kad je sat vezan štampačkim kablom i na njemu se pokrene štampanje liste.
 
-Posaljite .log fajl autoru programa ako USB i dalje ne radi.
+Pošaljite .log fajl autoru programa ako USB i dalje ne radi.

@@ -196,6 +196,26 @@ set TAURIS_SIGNING_KEY=isti_signing_key_kao_na_serveru
 Endpoint proverava token, hash i HMAC potpis.
 Ako je JSON menjan nakon ocitavanja, upload se odbija.
 
+## BRICON preko USB kabla (Print Manager protokol)
+
+Program čita BRICON sat (Speedy / Speedy-Xtreme / X-treme) istim binarnim protokolom kao
+Bricon Print Manager — rekonstruisan iz `BriconLib.dll` (`Communication.SendCommand`):
+
+- port **9600 baud, 8N2, RTS=1**; svaki paket `0x6C | payload | ck` (ck = (0x6C + Σ) & 0xFF),
+  odgovor `0x33 | adresa | komanda | len | status | podaci | ck`
+- otkrivanje sata: `ActivateMaster` (0x10) pa `ActivateBA` (0x80–0x85), 100 ms po pokušaju
+- čitanje: `GetFancier` → `GetPigeon(0…)` → `GetTimer(0…)` (kraj = status 5)
+- na satu ne treba ništa da se pritiska; Print Manager mora biti zatvoren (isti COM port)
+
+Rezultat se renderuje kao „lista doleta“ (isti oblik kao štampana lista) i čuva strukturirano
+(`bricon_pm_*` polja u JSON-u). Proba bez GUI-ja: `python scripts\bricon_pm_frame.py COM7`.
+Detalji i dijagnostika: `scripts/BRICON_COM_CAPTURE.txt`.
+
+## Slanje bez interneta
+
+Ako na terenu nema veze, paket ide u red (`pending_sends.json`) i program ga sam šalje kad veza
+bude dostupna (pri startu, posle preuzimanja) ili ručno: Baza → «Pošalji neposlate pakete».
+
 ## Vazno — TAURIS protokol (stvarno ponasanje, ne pretpostavka)
 
 TAURIS nema aktivnu komandu koju program salje uredjaju (nema `GET_RACE`, nema handshake) —
@@ -203,7 +223,9 @@ program samo otvori COM port i cita bajtove dok ih uredjaj salje; korisnik mora 
 slanje na samom satu. Kraj prenosa se prepoznaje po zatisju (N uzastopnih praznih citanja posto
 su bajtovi pocelu da stizu), ne po fiksnom marker-u — ako TAURIS-ova "kontrol lista" zaglavlje
 navodi ocekivani poslednji redni broj (Lag), program dodatno saceka dok se taj red
-(`NNNN SRB ...`) ne pojavi (do 4 dodatna kruga citanja) pre nego sto zakljuci da je prenos gotov.
+(`NNNN SRB ...`, redovi su uvuceni razmacima) ne pojavi (do 4 dodatna kruga citanja) pre nego sto
+zakljuci da je prenos gotov; ako se red ne pojavi, to je normalan kraj (Rezult.list ne mora da
+sadrzi sve ukorpane golubove). Ostecen prenos (nečitljivi bajtovi) se odbija uz jasnu poruku.
 
 Primljeni tekst moze biti ili JSON (ako pocinje sa `{`) ili obican tekst — obican tekst se cuva
 u celini kao `raw_com_text` i tako se i stampa u PDF (isto kao izlaz iz programa Analiza leta);

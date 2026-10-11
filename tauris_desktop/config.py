@@ -16,7 +16,7 @@ LEGACY_PLAIN_TAURISLOCK_JSON_KEY = "taurislock_password"
 TXT_EXPORT_DIRNAME = "txt dokumenti"
 OPEN_PDF_FOLDER_NAME = "Open PDF"
 OPEN_TXT_FOLDER_NAME = "Open TXT"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.1.0"
 MAIN_WINDOW_SKY_BG = "#f3f9ff"
 MAIN_WINDOW_BG_IMAGE_REL = "ICON/Pigeon in sky.png"
 # Dugme «Preuzmi» — plava paleta u tonu pozadine (#f3f9ff, #6ba3d6)
@@ -59,10 +59,12 @@ EMAIL_ZIP_BATCH_UNCOMPRESSED_BYTES = 12 * 1024 * 1024
 DEFAULT_TAURIS_DELIVERY_MODE = "email"
 TAURIS_READ_CHUNK = 4096
 TAURIS_READ_TIMEOUT_SEC = 0.13
-TAURIS_READ_IDLE_EMPTY_READS = 22
+# 38 × 0,13 s ≈ 5 s tišine = kraj prenosa. Ranije 22 (≈2,9 s) — sat na terenu pravi pauze duže od
+# toga usred liste, pa je glavno čitanje prerano stajalo i oslanjalo se na „dopunu“.
+TAURIS_READ_IDLE_EMPTY_READS = 38
 TAURIS_READ_MAX_ITERATIONS = 128
 TAURIS_CONNECT_MAX_ITERATIONS = 96
-TAURIS_TAIL_IDLE_EMPTY_READS = 48
+TAURIS_TAIL_IDLE_EMPTY_READS = 40
 TAURIS_TAIL_EXTRA_MAX_ITER = 100
 TAURIS_READ_TIMEOUT_SEC_SLOW = 0.25
 TAURIS_READ_IDLE_EMPTY_READS_SLOW = 72
@@ -72,6 +74,10 @@ TAURIS_TAIL_EXTRA_MAX_ITER_SLOW = 220
 TAURIS_CONNECT_MAX_ITERATIONS_SLOW = 200
 # Otvaranje COM porta ponekad prolazno puca (Windows kratko drži port zauzet odmah posle
 # priključenja USB-a) — jedan tihi ponovni pokušaj pre nego što se prijavi greška korisniku.
+# Kontrola kvaliteta prenosa: ispravna TAURIS lista je čist tekst (kontrolni bajtovi ≈ 0 %,
+# bajtovi ≥ 0x80 samo u imenima sa č/ć/š). Oštećen prenos (23.08.2026) imao je ~30 % oba.
+TAURIS_MAX_CONTROL_BYTE_RATIO = 0.03
+TAURIS_MAX_HIGH_BYTE_RATIO = 0.15
 TAURIS_OPEN_RETRY_ATTEMPTS = 2
 TAURIS_OPEN_RETRY_DELAY_SEC = 0.35
 
@@ -95,6 +101,9 @@ BRICON_USB_BAUD_CANDIDATES: tuple[int, ...] = (9600, 19200, 38400, 57600, 115200
 BRICON_USB_PER_BAUD_MIN_SEC = 12.0
 # Donja granica ukupnog vremena za ceo pasivni fallback (svi baud-ovi zajedno).
 BRICON_USB_READOUT_MIN_TOTAL_SEC = 30.0
+# Pasivni fallback (štampački kabl) posle neuspelog PM protokola — kratko, da korisnik ne čeka minute.
+BRICON_USB_PASSIVE_FALLBACK_MAX_SEC = 40.0
+BRICON_USB_PASSIVE_FALLBACK_MAX_BAUDS = 2
 BRICON_USB_DRIVER_URL = "https://www.bricon.be/download/software/Drivers/CDM_Setup.exe"
 BRICON_USB_DRIVER_BUNDLED = True
 

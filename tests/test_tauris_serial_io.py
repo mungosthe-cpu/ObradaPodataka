@@ -246,9 +246,14 @@ def test_tauris_response_arrives_in_many_small_parts(monkeypatch: pytest.MonkeyP
 # 8) Nepotpun paket — nedostaje poslednji red, "tail" dopunsko čitanje ne dobija ništa
 #    novo pa se korektno odustaje umesto večitog čekanja, i dijagnostika se snima.
 # ---------------------------------------------------------------------------
-def test_tauris_incomplete_packet_logs_and_saves_diagnostic(
+def test_tauris_rezult_list_without_last_lag_is_not_an_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """
+    Rezult.list ne mora da sadrži sve ukorpane golubove — izostanak reda „0003 SRB“ je kraj
+    čitanja (INFO), ne upozorenje i ne „parcijalni“ dijagnostički fajl (ranije je SVAKO terensko
+    čitanje završavalo lažnim upozorenjem).
+    """
     monkeypatch.setattr(tcap, "tauris_capture_dir", lambda: tmp_path)
     incomplete = (
         "TauRIS kontrol lista\n"
@@ -258,24 +263,59 @@ def test_tauris_incomplete_packet_logs_and_saves_diagnostic(
         # nedostaje 0003 SRB
     ).encode("utf-8")
     _install_fake_serial(monkeypatch, [{"chunks": [incomplete]}])
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         data = tdl.read_race_from_device(_fast_config())
     assert "0002 SRB" in data["raw_com_text"]
     assert "0003 SRB" not in data["raw_com_text"]
-    assert any("nema reda" in r.getMessage() for r in caplog.records)
+    assert not any(r.levelname == "WARNING" and "nema reda" in r.getMessage() for r in caplog.records)
+    assert any("kraj prenosa" in r.getMessage() for r in caplog.records)
+    assert not list(tmp_path.glob("tauris_partial_*.log")), "kompletan čitljiv prenos ne pravi parcijalni fajl"
+
+
+def test_tauris_indented_rows_satisfy_lag_check() -> None:
+    """Stvarni ispis sata uvlači redove razmacima — provera poslednjeg Lag-a mora to da toleriše."""
+    text = "     0039 SRB x\n     0040 SRB y\n"
+    assert tdl.tauris_text_has_lag_row(text, 40)
+    assert tdl.tauris_text_has_lag_row("0040 SRB", 40)
+    assert not tdl.tauris_text_has_lag_row(text, 41)
+
+
+def test_tauris_corrupted_transfer_is_rejected_with_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Oštećen prenos (kao TXT od 23.08.2026: crtice -> 0xD6, razmaci -> 0x02/0x06) se ne čuva kao rezultat."""
+    monkeypatch.setattr(tcap, "tauris_capture_dir", lambda: tmp_path)
+    corrupted = (
+        b"\x02\x02\x02\x02\xfe\xff\xffok" + b"\xd6" * 70 + b"\n"
+        b"H\x06\x02\x06\x06\x02\x02\x02\x02\x02\x06\x06\x06F-\xabRIS  Rez\xdd\x1b7\x19[\xdb\xa3\x03\x06\x02"
+        b"\x92M\xe5.00/1            23.08.26-19:28:52\n"
+        b"\xc8\x02\x06\x02" + b"\xd6" * 70 + b"\n"
+        b"\x06\x02\x06\x06\x02\xa6\xf5ran Ziramov         0077 0001-0077\n"
+    )
+    _install_fake_serial(monkeypatch, [{"chunks": [corrupted]}])
+    with pytest.raises(RuntimeError, match="OŠTEĆEN"):
+        tdl.read_race_from_device(_fast_config())
     saved = list(tmp_path.glob("tauris_partial_*.log"))
-    assert saved, "nepotpun paket mora ostaviti dijagnostički trag"
+    assert saved, "oštećen prenos mora ostaviti sirove bajtove za dijagnostiku"
+    body = saved[0].read_text(encoding="utf-8")
+    assert "ceo payload" in body and "0001-0077" in body
+
+
+def test_tauris_quality_gate_accepts_serbian_letters() -> None:
+    good = "TauRIS  Rezult.list\n     001.001.008.081  ŠĆEPANOVIĆ ĐORĐE   0029 0001-0029\n".encode("cp1250")
+    ok, _ = tdl.assess_tauris_transfer_quality(good)
+    assert ok
 
 
 # ---------------------------------------------------------------------------
 # 9) Nevažeći/garbage sadržaj — ne obara program, čuva se kao raw_com_text.
 # ---------------------------------------------------------------------------
-def test_tauris_invalid_garbage_payload_does_not_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tauris_invalid_garbage_payload_is_rejected_as_corrupted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(tcap, "tauris_capture_dir", lambda: tmp_path)
     garbage = bytes(range(256)) * 2
     _install_fake_serial(monkeypatch, [{"chunks": [garbage]}])
-    data = tdl.read_race_from_device(_fast_config())
-    assert "raw_com_text" in data
-    assert data["race_id"].startswith("TAURIS-")
+    with pytest.raises(RuntimeError, match="OŠTEĆEN"):
+        tdl.read_race_from_device(_fast_config())
 
 
 # ---------------------------------------------------------------------------
