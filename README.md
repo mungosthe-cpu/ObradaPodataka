@@ -207,6 +207,11 @@ Bricon Print Manager — rekonstruisan iz `BriconLib.dll` (`Communication.SendCo
 - čitanje: `GetFancier` → `GetPigeon(0…)` → `GetTimer(0…)` (kraj = status 5)
 - na satu ne treba ništa da se pritiska; Print Manager mora biti zatvoren (isti COM port)
 
+Ako se sat ne javi na izabranom portu, program ga sam traži na ostalim USB-serijskim portovima
+(„COM: Auto“ kao u Print Manageru) i pamti port na kome ga je našao. Iz vremena ukorpavanja i
+očitavanja računa se **kontrola sata** (odstupanje internog sata od mastera); preko 60 s PDF dobija
+crveno upozorenje na vrhu. «Uvezi BRICON fajl» podrazumevano otvara `C:\ReadOuts\Printmanager`.
+
 Rezultat se renderuje kao „lista doleta“ (isti oblik kao štampana lista) i čuva strukturirano
 (`bricon_pm_*` polja u JSON-u). Proba bez GUI-ja: `python scripts\bricon_pm_frame.py COM7`.
 Detalji i dijagnostika: `scripts/BRICON_COM_CAPTURE.txt`.

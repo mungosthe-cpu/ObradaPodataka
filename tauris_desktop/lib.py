@@ -261,6 +261,25 @@ def prepare_serial_port_for_bricon(ser: Any, *, mode: str) -> None:
         logging.debug("BRICON: reset bafera nije uspeo (mode=%s): %s: %s", mode, type(exc).__name__, exc)
 
 
+def bricon_import_initial_dir(last_used: str | None = None) -> str:
+    """
+    Folder koji «Uvezi BRICON fajl» otvara: poslednji korišćeni (ako još postoji), zatim
+    folderi Print Managera (``BRICON_PM_IMPORT_DIRS`` — tamo PM snima očitavanja), na kraju
+    Preuzimanja korisnika.
+    """
+    candidates: list[str] = []
+    if last_used:
+        candidates.append(str(last_used))
+    candidates.extend(BRICON_PM_IMPORT_DIRS)
+    for c in candidates:
+        try:
+            if c and Path(c).is_dir():
+                return str(Path(c))
+        except OSError:
+            continue
+    return str(Path.home() / "Downloads")
+
+
 def setup_logging() -> None:
     log_path = app_data_dir() / "logs" / "app.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2466,7 +2485,46 @@ def generate_pdf_log_style(
         leftIndent=0,
         rightIndent=0,
     )
-    story = [Preformatted(body, mono_style)]
+    story: list[Any] = []
+    check = race_data.get("bricon_clock_check")
+    if isinstance(check, dict) and check.get("message"):
+        from reportlab.platypus import Paragraph, Spacer
+        from xml.sax.saxutils import escape as _xml_escape
+
+        ok = check.get("ok")
+        color = "#1b6e2a" if ok is True else ("#b00020" if ok is False else "#555555")
+        bg = colors.HexColor("#e8f5e9") if ok is True else (
+            colors.HexColor("#fdecea") if ok is False else colors.HexColor("#f2f2f2")
+        )
+        banner_style = ParagraphStyle(
+            "BriconClockCheck",
+            parent=styles["Normal"],
+            fontName=register_font_if_available(),
+            fontSize=PDF_REPORT_BODY_FONT_PT + 1,
+            leading=(PDF_REPORT_BODY_FONT_PT + 1) * 1.3,
+            textColor=colors.HexColor(color),
+            backColor=bg,
+            borderColor=colors.HexColor(color),
+            borderWidth=0.8,
+            borderPadding=5,
+        )
+        # Bez <b>: na Windows-u je font registrovan kao jedan TTF (Arial) bez bold porodice —
+        # reportlab bi tada bacio grešku „Can't map determine family/bold“.
+        lines = [_xml_escape(str(check["message"]))]
+        for row in check.get("flights") or []:
+            def _f(v: Any) -> str:
+                return "—" if v is None else f"{'+' if v >= 0 else '−'}{abs(int(v))} s"
+            lines.append(
+                _xml_escape(
+                    f"Let {int(row.get('index', 0)) + 1} ({row.get('flight_id') or '-'}): "
+                    f"ukorpavanje {_f(row.get('basketing_deviation_sec'))}, "
+                    f"očitavanje {_f(row.get('readout_deviation_sec'))}, "
+                    f"hod sata {_f(row.get('drift_sec'))}"
+                )
+            )
+        story.append(Paragraph("<br/>".join(lines), banner_style))
+        story.append(Spacer(1, 4 * mm))
+    story.append(Preformatted(body, mono_style))
     doc.build(story)
 
 

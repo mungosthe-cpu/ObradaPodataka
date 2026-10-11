@@ -16,7 +16,7 @@ LEGACY_PLAIN_TAURISLOCK_JSON_KEY = "taurislock_password"
 TXT_EXPORT_DIRNAME = "txt dokumenti"
 OPEN_PDF_FOLDER_NAME = "Open PDF"
 OPEN_TXT_FOLDER_NAME = "Open TXT"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.5"
 MAIN_WINDOW_SKY_BG = "#f3f9ff"
 MAIN_WINDOW_BG_IMAGE_REL = "ICON/Pigeon in sky.png"
 # Dugme «Preuzmi» — plava paleta u tonu pozadine (#f3f9ff, #6ba3d6)
@@ -104,6 +104,12 @@ BRICON_USB_READOUT_MIN_TOTAL_SEC = 30.0
 # Pasivni fallback (štampački kabl) posle neuspelog PM protokola — kratko, da korisnik ne čeka minute.
 BRICON_USB_PASSIVE_FALLBACK_MAX_SEC = 40.0
 BRICON_USB_PASSIVE_FALLBACK_MAX_BAUDS = 2
+# Podrazumevani folderi Print Managera za «Uvezi BRICON fajl» (prvi postojeći se otvara).
+BRICON_PM_IMPORT_DIRS: tuple[str, ...] = (
+    r"C:\ReadOuts\Printmanager",
+    r"C:\ReadOuts",
+    r"C:\Bricon",
+)
 BRICON_USB_DRIVER_URL = "https://www.bricon.be/download/software/Drivers/CDM_Setup.exe"
 BRICON_USB_DRIVER_BUNDLED = True
 
@@ -130,6 +136,8 @@ class TaurisConnectionConfig:
     read_idle_empty_reads: int = TAURIS_READ_IDLE_EMPTY_READS
     tail_idle_empty_reads: int = TAURIS_TAIL_IDLE_EMPTY_READS
     tail_extra_max_iterations: int = TAURIS_TAIL_EXTRA_MAX_ITER
+    # BRICON „COM: Auto“: ostali portovi na kojima se sat traži ako se ne javi na ``port``.
+    candidate_ports: tuple[str, ...] = ()
 
 
 @dataclass

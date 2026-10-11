@@ -507,6 +507,7 @@ class PmReadout:
     timers: list[PmTimer] = field(default_factory=list)
     read_at: datetime = field(default_factory=datetime.now)
     warnings: list[str] = field(default_factory=list)
+    port: str = ""
 
 
 def _dt_from_strings(date6: str, time6: str) -> datetime | None:
@@ -731,6 +732,76 @@ def pm_read_all(
 # --- Render u tekst „lista doleta“ -------------------------------------------------------------
 
 
+# --- Kontrola sata (odstupanje internog sata od mastera) --------------------------------
+
+# Iznad ovoga se u izveštaju i PDF-u ističe upozorenje (sekunde, apsolutno).
+PM_CLOCK_DEVIATION_WARN_SEC = 60
+
+
+def _deviation_sec(master: datetime | None, internal: datetime | None) -> int | None:
+    """Interni sat minus master (klupski) sat, u sekundama; None ako vreme nije upisano."""
+    if master is None or internal is None:
+        return None
+    return int(round((internal - master).total_seconds()))
+
+
+def _fmt_dev(sec: int | None) -> str:
+    if sec is None:
+        return "—"
+    sign = "+" if sec >= 0 else "−"
+    a = abs(sec)
+    return f"{sign}{a // 60}:{a % 60:02d} ({sign}{a} s)" if a >= 60 else f"{sign}{a} s"
+
+
+def pm_clock_check(ro: PmReadout, *, warn_sec: int = PM_CLOCK_DEVIATION_WARN_SEC) -> dict[str, Any]:
+    """
+    Kao „kontrola“ kolona u Print Manageru: za svaki let poređenje internog vremena sata sa
+    master vremenom pri ukorpavanju i pri očitavanju. Vraća sažetak za JSON/PDF.
+    """
+    rows: list[dict[str, Any]] = []
+    worst: int | None = None
+    for t in ro.timers:
+        b = _deviation_sec(t.basketing_master, t.basketing_internal)
+        r = _deviation_sec(t.readout_master, t.readout_internal)
+        drift = (r - b) if (r is not None and b is not None) else None
+        for v in (b, r, drift):
+            if v is not None and (worst is None or abs(v) > abs(worst)):
+                worst = v
+        rows.append(
+            {
+                "index": t.index,
+                "flight_id": t.flight_id,
+                "club_id": t.club_id,
+                "basketing_deviation_sec": b,
+                "readout_deviation_sec": r,
+                "drift_sec": drift,
+            }
+        )
+    if not rows or worst is None:
+        status = "nepoznato"
+        ok = None
+        message = "Kontrola sata: nema podataka o ukorpavanju/očitavanju u satu."
+    elif abs(worst) > warn_sec:
+        status = "upozorenje"
+        ok = False
+        message = (
+            f"UPOZORENJE — odstupanje sata {_fmt_dev(worst)} prelazi dozvoljenih {warn_sec} s. "
+            "Proverite sat i ukorpavanje pre obračuna."
+        )
+    else:
+        status = "ok"
+        ok = True
+        message = f"Kontrola sata OK — najveće odstupanje {_fmt_dev(worst)} (granica {warn_sec} s)."
+    return {
+        "status": status,
+        "ok": ok,
+        "max_deviation_sec": worst,
+        "warn_threshold_sec": warn_sec,
+        "message": message,
+        "flights": rows,
+    }
+
+
 def _fmt_dt(dt: datetime | None, with_date: bool) -> str:
     if dt is None:
         return "--/--/-- --:--:--" if with_date else "--:--:--"
@@ -760,6 +831,13 @@ def render_lista_doleta(ro: PmReadout) -> str:
             f"{_fmt_dt(t.readout_master, True)} {_fmt_dt(t.readout_internal, False)} "
             f"{t.basketing_diff or ''} {t.readout_diff or ''} {t.diff or ''}".rstrip()
         )
+    check = pm_clock_check(ro)
+    for row in check["flights"]:
+        lines.append(
+            f"kontrola let {row['index'] + 1}: ukorpavanje {_fmt_dev(row['basketing_deviation_sec'])}, "
+            f"očitavanje {_fmt_dev(row['readout_deviation_sec'])}, hod {_fmt_dev(row['drift_sec'])}"
+        )
+    lines.append(check["message"])
     lines.append("")
     arrived = [p for p in ro.pigeons if p.arrived]
     arrived.sort(key=lambda p: p.arrival or datetime.max)
@@ -815,6 +893,8 @@ def readout_to_structured(ro: PmReadout) -> dict[str, Any]:
             for p in ro.pigeons
         ],
         "bricon_pm_warnings": list(ro.warnings),
+        "bricon_clock_check": pm_clock_check(ro),
+        "bricon_port": ro.port,
         "bricon_pm_timers": [
             {
                 "index": t.index,
@@ -837,6 +917,69 @@ def readout_to_structured(ro: PmReadout) -> dict[str, Any]:
 # --- Javni ulaz -----------------------------------------------------------------------
 
 
+def _ordered_unique_ports(port: str, candidate_ports: list[str] | tuple[str, ...] | None) -> list[str]:
+    out: list[str] = []
+    for p in (port, *(candidate_ports or ())):
+        p = (p or "").strip().upper()
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def pm_scan_ports(
+    ports: list[str],
+    *,
+    max_wait_sec: float,
+    on_bytes: Callable[[int], None] | None = None,
+    capture: BriconComCapture | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_phase: Callable[[str], None] | None = None,
+) -> tuple[str, Any, PmLink, PmDevice] | None:
+    """
+    „COM: Auto“ kao u Print Manageru (``Communication.NextComport``): redom na svakom portu
+    jedan krug otkrivanja (Master + BA adrese, ~1 s), pa sledeći port, dok se sat ne javi
+    ili ne istekne vreme. Vraća (port, otvoren serijski port, link, uređaj) — port ostaje
+    otvoren za čitanje. Port koji ne može da se otvori (zauzet / nestao) se preskače.
+    """
+    deadline = time.monotonic() + max(1.0, max_wait_sec)
+    dead: set[str] = set()
+    rounds = 0
+    while time.monotonic() < deadline:
+        live = [p for p in ports if p not in dead]
+        if not live:
+            return None
+        for p in live:
+            if should_cancel is not None and should_cancel():
+                return None
+            try:
+                ser = open_pm_serial(p, PM_BAUD_DEFAULT)
+            except Exception as exc:
+                logging.info("BRICON PM auto-port: %s se ne otvara (%s: %s) — preskačem", p, type(exc).__name__, exc)
+                dead.add(p)
+                continue
+            link = PmLink(wrap_serial_for_capture(ser, capture), on_rx_bytes=on_bytes)
+            try:
+                dev = pm_discover_once(link)
+            except Exception as exc:
+                logging.info("BRICON PM auto-port: %s greška (%s: %s)", p, type(exc).__name__, exc)
+                dev = None
+            if dev is not None:
+                logging.info("BRICON PM auto-port: sat nađen na %s (%s)", p, dev.model)
+                return p, ser, link, dev
+            try:
+                ser.close()
+            except Exception:
+                pass
+        rounds += 1
+        if on_phase is not None:
+            left = max(0.0, deadline - time.monotonic())
+            on_phase(
+                f"tražim BRICON sat na portovima {', '.join(live)}… (krug {rounds}, još {left:.0f}s)"
+            )
+        time.sleep(PM_DISCOVERY_ROUND_PAUSE_SEC)
+    return None
+
+
 def read_readout_via_print_manager_protocol(
     port: str,
     *,
@@ -845,45 +988,86 @@ def read_readout_via_print_manager_protocol(
     capture: BriconComCapture | None = None,
     on_phase: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    candidate_ports: list[str] | tuple[str, ...] | None = None,
 ) -> PmReadout:
     """
     Ceo PM tok: otvori port (9600 8N2), čekaj da se sat javi (do ``listen_sec``), pročitaj
-    takmičara, golubove i vremena. Baca ``RuntimeError`` sa jasnim objašnjenjem ako sat
-    nije nađen ili je prenos pukao; delimični binarni odgovori se čuvaju u dijagnostici.
+    takmičara, golubove i vremena. Ako je zadato više portova (``candidate_ports``), radi
+    kao „COM: Auto“ u Print Manageru — sat se traži redom na svim portovima, počevši od
+    ``port``. Baca ``RuntimeError`` sa jasnim objašnjenjem ako sat nije nađen ili je prenos
+    pukao; delimični binarni odgovori se čuvaju u dijagnostici.
     """
     if serial is None:
         raise RuntimeError("Nedostaje pyserial")
 
+    ports = _ordered_unique_ports(port, candidate_ports)
+    if not ports:
+        raise RuntimeError("Nije izabran nijedan COM port.")
+
     if capture is None and bricon_capture_enabled():
-        capture = start_capture_session(port, note="TAURIS_BRICON_CAPTURE=1")
+        capture = start_capture_session(ports[0], note="TAURIS_BRICON_CAPTURE=1")
 
     def _phase(msg: str) -> None:
         if on_phase is not None:
             on_phase(msg)
 
-    _phase(f"BRICON PM: otvaram {port} (9600 baud, 8N2)…")
-    ser = open_pm_serial(port, PM_BAUD_DEFAULT)
-    wser = wrap_serial_for_capture(ser, capture)
-    link = PmLink(wser, on_rx_bytes=on_bytes)
+    ser: Any = None
+    link: PmLink | None = None
+    device: PmDevice | None = None
+    found_port = ports[0]
+    if len(ports) == 1:
+        _phase(f"BRICON PM: otvaram {found_port} (9600 baud, 8N2)…")
+        ser = open_pm_serial(found_port, PM_BAUD_DEFAULT)
+        link = PmLink(wrap_serial_for_capture(ser, capture), on_rx_bytes=on_bytes)
+        _phase("BRICON PM: tražim sat (Master 0x10, BA 0x80–0x85)…")
+        try:
+            device = pm_discover(
+                link, max_wait_sec=listen_sec, should_cancel=should_cancel, on_phase=on_phase
+            )
+        except Exception:
+            try:
+                ser.close()
+            except Exception:
+                pass
+            raise
+    else:
+        _phase(f"BRICON PM: automatski tražim sat na {len(ports)} porta ({', '.join(ports)})…")
+        hit = pm_scan_ports(
+            ports,
+            max_wait_sec=listen_sec,
+            on_bytes=on_bytes,
+            capture=capture,
+            should_cancel=should_cancel,
+            on_phase=on_phase,
+        )
+        if hit is not None:
+            found_port, ser, link, device = hit
+
+    if device is None or link is None:
+        try:
+            if ser is not None:
+                ser.close()
+        except Exception:
+            pass
+        if should_cancel is not None and should_cancel():
+            raise RuntimeError("Otkazano od strane korisnika.")
+        where = f"Port: {ports[0]}" if len(ports) == 1 else f"Probani portovi: {', '.join(ports)}"
+        last_err = link.last_frame_error if link is not None else None
+        raise RuntimeError(
+            "BRICON sat se nije javio na Print Manager protokol (9600 baud, 8N2).\n"
+            f"{where}. Poslednja greška okvira: {last_err or '-'}.\n"
+            "Proverite: USB kabl i FTDI drajver, da je Print Manager zatvoren, "
+            "da je sat uključen i priključen pre klika na «Preuzmi BRICON»."
+        )
+
     failed = False
     try:
-        _phase("BRICON PM: tražim sat (Master 0x10, BA 0x80–0x85)…")
-        device = pm_discover(
-            link, max_wait_sec=listen_sec, should_cancel=should_cancel, on_phase=on_phase
-        )
-        if device is None:
-            if should_cancel is not None and should_cancel():
-                raise RuntimeError("Otkazano od strane korisnika.")
-            raise RuntimeError(
-                "BRICON sat se nije javio na Print Manager protokol (9600 baud, 8N2).\n"
-                f"Port: {port}. Poslednja greška okvira: {link.last_frame_error or '-'}.\n"
-                "Proverite: USB kabl i FTDI drajver, da je Print Manager zatvoren, "
-                "da je sat uključen i priključen pre klika na «Preuzmi BRICON»."
-            )
         logging.info(
             "BRICON PM diag | phase=device_found port=%s addr=0x%02X version=%r model=%s",
-            port, device.addr, device.version, device.model,
+            found_port, device.addr, device.version, device.model,
         )
+        if found_port != ports[0]:
+            _phase(f"sat nađen na {found_port} (umesto izabranog {ports[0]})…")
         try:
             readout = pm_read_all(link, device, on_phase=on_phase, should_cancel=should_cancel)
         except (PmTimeout, PmFrameError, PmProtocolError) as exc:
@@ -892,9 +1076,10 @@ def read_readout_via_print_manager_protocol(
                 f"BRICON prenos je prekinut usred čitanja: {exc}.\n"
                 "Ostavite sat priključen i pokušajte ponovo."
             ) from exc
+        readout.port = found_port
         logging.info(
             "BRICON PM diag | phase=readout_ok port=%s pigeons=%s timers=%s rx=%sB",
-            port, len(readout.pigeons), len(readout.timers), link.total_rx,
+            found_port, len(readout.pigeons), len(readout.timers), link.total_rx,
         )
         return readout
     finally:
@@ -905,7 +1090,7 @@ def read_readout_via_print_manager_protocol(
         if failed and link.rx_history:
             try:
                 save_partial_payload_diagnostic(
-                    port, bytes(link.rx_history), reason="PM prenos prekinut — sirovi odgovori sata"
+                    found_port, bytes(link.rx_history), reason="PM prenos prekinut — sirovi odgovori sata"
                 )
             except Exception:
                 logging.exception("BRICON PM: čuvanje dijagnostike nije uspelo.")
@@ -950,6 +1135,7 @@ def try_print_manager_protocol_readout(
             capture=capture,
             on_phase=on_phase,
             should_cancel=should_cancel,
+            candidate_ports=getattr(config, "candidate_ports", None) or None,
         )
     except Exception as exc:
         if should_cancel is not None and should_cancel():

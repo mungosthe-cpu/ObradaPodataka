@@ -368,6 +368,21 @@ class TaurisApp:
             ports, self._BRICON_ONLY_KEYS + self._GENERIC_USB_SERIAL_KEYS, exclude=self._TAURIS_ONLY_KEYS
         )
 
+    def _bricon_auto_port_candidates(self, selected: str) -> list[str]:
+        """
+        „COM: Auto“ kao u Print Manageru: izabrani port prvi, zatim portovi koji liče na
+        BRICON/USB-serial, pa ostali pouzdani. Portovi koji liče na TAURIS se izostavljaju
+        (ne šaljemo BRICON komande drugom satu).
+        """
+        reliable = self._reliable_com_ports()
+        liked = self._bricon_like_com_ports(reliable)
+        tauris_only = set(self._filter_com_ports_by_keys(reliable, self._TAURIS_ONLY_KEYS))
+        out: list[str] = []
+        for p in ([selected] if selected else []) + liked + reliable:
+            if p and p not in out and p not in tauris_only:
+                out.append(p)
+        return out
+
     def _device_like_com_ports(self, ports: list[str]) -> list[str]:
         """Portovi koji liče na TRENUTNO IZABRANI tip uređaja (TAURIS ili BRICON)."""
         if self._get_device_kind() == CLOCK_DEVICE_BRICON:
@@ -489,7 +504,9 @@ class TaurisApp:
             self.device_var.set("TAURIS")
 
     def _persist_gui_settings(self) -> None:
-        save_gui_settings_dict(
+        # Spoji sa postojećim — ne briši ključeve koje GUI ne prikazuje (npr. bricon_import_dir).
+        merged = dict(load_gui_settings_dict())
+        merged.update(
             {
                 "device_type": (self.device_var.get() or "TAURIS").strip(),
                 "port": self._resolve_com_device(self.port_var.get()),
@@ -501,6 +518,7 @@ class TaurisApp:
                 "slow_uart_legacy": bool(self.slow_tauris_var.get()),
             }
         )
+        save_gui_settings_dict(merged)
 
     def _get_device_kind(self) -> str:
         label = (self.device_var.get() or "TAURIS").strip().upper()
@@ -1570,10 +1588,14 @@ class TaurisApp:
             logging.exception("BRICON COM snimak.")
             self.worker_queue.put(("bricon_capture_err", exc))
 
+    def _bricon_import_initial_dir(self) -> str:
+        """Poslednji korišćeni folder, pa Print Manager folderi (C:\\ReadOuts\\Printmanager…), pa Preuzimanja."""
+        return bricon_import_initial_dir(load_gui_settings_dict().get("bricon_import_dir"))
+
     def import_bricon_file_clicked(self) -> None:
         if self.busy:
             return
-        initial = str(Path.home() / "Downloads")
+        initial = self._bricon_import_initial_dir()
         picked = filedialog.askopenfilename(
             title="Uvezite izvoz sa BRICON Print Managera",
             initialdir=initial,
@@ -1585,6 +1607,12 @@ class TaurisApp:
         )
         if not picked:
             return
+        try:
+            d = load_gui_settings_dict()
+            d["bricon_import_dir"] = str(Path(picked).parent)
+            save_gui_settings_dict(d)
+        except Exception:
+            logging.debug("Pamćenje foldera za BRICON uvoz nije uspelo.", exc_info=True)
         lock_pw = get_configured_taurislock_password() or DEFAULT_TAURISLOCK_BUNDLE_PASSWORD
         self._set_busy(True)
         self.status_var.set("Status: učitavam BRICON fajl…")
@@ -1665,6 +1693,8 @@ class TaurisApp:
                 "Status: čitam COM. Na TAURIS-u pokrenite slanje podataka u tom trenutku."
             )
         config = self._get_config()
+        if is_bricon:
+            config.candidate_ports = tuple(self._bricon_auto_port_candidates(port))
         pilot_name = self.pilot_var.get().strip() or UNKNOWN_PILOT_LABEL
         staza = self._capture_staza_from_ui()
         device_kind = self._get_device_kind()
@@ -1937,6 +1967,12 @@ class TaurisApp:
         elif event_type == "ok":
             locked_bundle_path, delivery_note, race_data, preview_pdf_bytes, pilot_effective = payload
             self.last_locked_bundle_path = locked_bundle_path
+            found_port = race_data.get("bricon_port") if isinstance(race_data, dict) else None
+            if found_port and found_port != self._resolve_com_device(self.port_var.get()):
+                # Auto-port je našao sat na drugom portu — zapamti ga za sledeći put.
+                logging.info("BRICON auto-port: izabran %s (pronađen sat)", found_port)
+                self.port_var.set(self._label_for_com_device(found_port))
+                self._sync_saved_port_in_settings(found_port)
             if (
                 isinstance(pilot_effective, str)
                 and pilot_effective.strip()

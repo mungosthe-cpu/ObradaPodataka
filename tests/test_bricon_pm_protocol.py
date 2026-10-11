@@ -312,3 +312,107 @@ def test_bricon_usb_readout_uses_pm_result(monkeypatch: pytest.MonkeyPatch) -> N
     assert len(data["bricon_pm_pigeons"]) == 1
     assert data["bricon_clockings"] or br.parse_bricon_speedy_arrival_rows(data["raw_com_text"])
     assert not passive_opened, "pasivni fallback se ne pokreće kad PM uspe"
+
+
+# --- 2.1.5: auto-port, kontrola sata, folder za uvoz ----------------------------------------
+
+
+def _timer_record_with(b_master: str, b_internal: str, r_master: str, r_internal: str) -> bytes:
+    data = b"\x00" + b"0001" + b"0001"
+    data += b"090526" + b_master.encode() + b_internal.encode() + b"0000"
+    data += b"100526" + r_master.encode() + r_internal.encode() + b"0000"
+    data += b"0000"
+    return data
+
+
+def test_auto_port_finds_clock_on_second_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """„COM: Auto“: izabran COM3 (prazan), sat je na COM7 — program ga nađe i pamti port."""
+    real = FakePmClock(pigeons=[_pigeon_record("C507F0C6", "SR-23-0000464835", "100526", "120435")])
+    opened: list[str] = []
+
+    def factory(*, port: str, **kw):
+        opened.append(port)
+        if port == "COM7":
+            return real
+        return FakePmClock(port=port, silent=True)
+
+    monkeypatch.setattr(pm, "serial", FakeSerialModule(factory, []))
+    ro = pm.read_readout_via_print_manager_protocol(
+        "COM3", listen_sec=3.0, candidate_ports=["COM3", "COM5", "COM7"]
+    )
+    assert ro.port == "COM7"
+    assert len(ro.pigeons) == 1
+    assert opened[0] == "COM3", "izabrani port se proba prvi"
+    assert "COM7" in opened
+    assert pm.readout_to_structured(ro)["bricon_port"] == "COM7"
+
+
+def test_auto_port_skips_busy_port_and_reports_all_tried(monkeypatch: pytest.MonkeyPatch) -> None:
+    def factory(*, port: str, **kw):
+        if port == "COM4":
+            raise OSError("Access is denied (port zauzet — Print Manager?)")
+        return FakePmClock(port=port, silent=True)
+
+    monkeypatch.setattr(pm, "serial", FakeSerialModule(factory, []))
+    with pytest.raises(RuntimeError) as ei:
+        pm.read_readout_via_print_manager_protocol("COM3", listen_sec=0.5, candidate_ports=["COM4"])
+    assert "COM3, COM4" in str(ei.value)
+
+
+def test_clock_check_ok_and_warning() -> None:
+    dev = pm.PmDevice(addr=0x82, version="SPD 2.07", model="Bricon Speedy")
+    fan = pm.PmFancier(licence="C5397", name="KUSIC DRAGAN")
+    ok_ro = pm.PmReadout(
+        device=dev, fancier=fan,
+        timers=[pm.parse_timer_response(0, _timer_record_with("200342", "200342", "180336", "180338"))],
+    )
+    check = pm.pm_clock_check(ok_ro)
+    assert check["ok"] is True and check["max_deviation_sec"] == 2
+    assert check["flights"][0]["readout_deviation_sec"] == 2
+    assert check["flights"][0]["drift_sec"] == 2
+    text = pm.render_lista_doleta(ok_ro)
+    assert "Kontrola sata OK" in text
+
+    bad_ro = pm.PmReadout(
+        device=dev, fancier=fan,
+        timers=[pm.parse_timer_response(0, _timer_record_with("200342", "200342", "180336", "180536"))],
+    )
+    bad = pm.pm_clock_check(bad_ro)
+    assert bad["ok"] is False and bad["max_deviation_sec"] == 120
+    assert "UPOZORENJE" in pm.render_lista_doleta(bad_ro)
+
+    none_ro = pm.PmReadout(device=dev, fancier=fan)
+    assert pm.pm_clock_check(none_ro)["ok"] is None
+
+
+def test_clock_check_banner_in_pdf(tmp_path) -> None:
+    import fitz  # PyMuPDF
+
+    import tauris_desktop.lib as tdl
+
+    race = {
+        "race_id": "B-1", "start_time": "2026-05-10T18:00:00", "duration_sec": 0,
+        "raw_com_text": "lista doleta\n" + "1 C507F0C6 SR-23-0000464835 10/05 12:04:35 let:0001 OK\n" * 3,
+        "bricon_clock_check": {
+            "ok": False, "max_deviation_sec": 120, "message": "UPOZORENJE — odstupanje sata +2:00 (+120 s)",
+            "flights": [{"index": 0, "flight_id": "0001", "basketing_deviation_sec": 0,
+                         "readout_deviation_sec": 120, "drift_sec": 120}],
+        },
+    }
+    out = tmp_path / "x.pdf"
+    tdl.generate_pdf(race, out, "KUSIC DRAGAN", "COM7")
+    text = "".join(page.get_text() for page in fitz.open(str(out)))
+    assert "UPOZORENJE" in text and "hod sata" in text
+
+
+def test_bricon_import_initial_dir_prefers_last_then_pm_folder(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    import tauris_desktop.lib as tdl
+
+    pm_dir = tmp_path / "ReadOuts" / "Printmanager"
+    pm_dir.mkdir(parents=True)
+    monkeypatch.setattr(tdl, "BRICON_PM_IMPORT_DIRS", (str(pm_dir), str(tmp_path / "nema")))
+    assert tdl.bricon_import_initial_dir(None) == str(pm_dir)
+    last = tmp_path / "moji_fajlovi"
+    last.mkdir()
+    assert tdl.bricon_import_initial_dir(str(last)) == str(last)
+    assert tdl.bricon_import_initial_dir(str(tmp_path / "obrisan")) == str(pm_dir)

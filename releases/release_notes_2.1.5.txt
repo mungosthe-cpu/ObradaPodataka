@@ -1,0 +1,21 @@
+TaurisPdfApp **2.1.5** — BRICON „COM: Auto“, kontrola sata u PDF-u, uvoz iz Print Manager foldera
+
+## Novo u 2.1.5
+- **BRICON: automatsko pronalaženje porta** (kao „COM: Auto“ u Print Manageru). Ako se sat ne javi
+  na izabranom portu, program ga redom traži na ostalim USB-serijskim portovima (izabrani prvi,
+  portovi koji liče na TAURIS se preskaču, zauzeti portovi se preskaču). Port na kome je sat
+  nađen se pamti za sledeći put.
+- **Kontrola sata (odstupanje)**: iz vremena ukorpavanja i očitavanja (master vs. interni sat)
+  računa se odstupanje i „hod“ sata po letu. U PDF-u je na vrhu zeleni okvir „Kontrola sata OK“
+  ili crveni „UPOZORENJE“ ako odstupanje pređe 60 s; isto u tekstu liste i u JSON-u
+  (bricon_clock_check).
+- **«Uvezi BRICON fajl»** otvara poslednji korišćeni folder, a ako ga nema — folder u koji
+  Print Manager snima očitavanja (C:\ReadOuts\Printmanager, C:\ReadOuts, C:\Bricon).
+
+## Ispravke
+- Podešavanja GUI-ja se pri snimanju spajaju sa postojećim (ranije su se brisali ključevi koje
+  prozor ne prikazuje).
+
+## Sadržaj iz 2.1.0
+- BRICON čitanje preko USB-a istim protokolom kao Print Manager (potvrđeno i na Print Manageru
+  iz 2026), TAURIS bez lažnih upozorenja + odbijanje oštećenog prenosa, red neposlatih paketa.
